@@ -16,23 +16,23 @@ export const metadata: Metadata = {
   metadataBase: new URL("https://homeshift.ai"),
   title: {
     default: "HomeShift AI",
-    template: "%s · HomeShift AI",
+    template: "%s | HomeShift AI",
   },
   description:
-    "Agentic household energy management that cuts bills without sacrificing comfort.",
+    "Turn real household energy data into a traceable savings plan with live specialist agents.",
   openGraph: {
-    title: "HomeShift AI — Cut bills, not comfort",
+    title: "HomeShift AI | Real data, live agents, traceable plan",
     description:
-      "Seven specialist agents turn household energy evidence into a measurable seven-day plan.",
+      "Seven specialist agents turn household energy evidence into a measurable action plan.",
     type: "website",
-    images: ["/og.png"],
+    images: ["/og-real-data.png"],
   },
   twitter: {
     card: "summary_large_image",
-    title: "HomeShift AI — Cut bills, not comfort",
+    title: "HomeShift AI | Real data, live agents, traceable plan",
     description:
-      "An explainable, adaptive household energy copilot.",
-    images: ["/og.png"],
+      "A deterministic and explainable household energy copilot.",
+    images: ["/og-real-data.png"],
   },
 };
 

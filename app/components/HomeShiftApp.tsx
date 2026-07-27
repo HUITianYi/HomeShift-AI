@@ -2,21 +2,22 @@
 
 import {
   Activity,
+  AlertCircle,
   ArrowRight,
   BarChart3,
   Check,
   CheckCircle2,
   ChevronRight,
   CircleDollarSign,
-  CloudUpload,
   Database,
+  Download,
   FileImage,
   FileSpreadsheet,
   Gauge,
   Home,
   Info,
-  Leaf,
   Languages,
+  Leaf,
   LoaderCircle,
   LockKeyhole,
   MoonStar,
@@ -37,65 +38,83 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
-  Children,
-  cloneElement,
-  isValidElement,
-  useEffect,
-  useMemo,
-  useState,
-  type ReactNode,
-} from "react";
-import {
-  buildInsights,
+  aggregateDailyProfile,
+  analyzeHousehold,
+  assessLoadData,
   calculateCarbon,
-  calculateCost,
-  compareActualToPlan,
-  detectLoadPatterns,
-  estimateAppliances,
+  demoCsvTemplate,
   generateDemoLoad,
-  generatePlans,
   parseIntervalCsv,
 } from "@/lib/energy";
-import { agentTrace, dailyTasks, demoProfile } from "@/lib/demo-data";
-import { translate, type Locale } from "@/lib/i18n";
+import {
+  demoAppliances,
+  demoBill,
+  demoParameters,
+  demoProfile,
+} from "@/lib/demo-data";
+import { t, type Locale } from "@/lib/i18n";
 import type {
+  AgentErrorResponse,
+  AgentSuccessResponse,
+  AnalysisParameters,
+  ApplianceInputs,
   AppStage,
+  BillInput,
+  EnergyInsight,
   EnergyPlan,
+  HouseholdProfile,
+  LoadDataQuality,
   LoadPoint,
+  PlanAction,
   SourceKind,
 } from "@/lib/types";
 
-const stageLabels: { id: AppStage; label: string; step: string }[] = [
-  { id: "baseline", label: "Baseline", step: "01" },
-  { id: "diagnosis", label: "Diagnosis", step: "02" },
-  { id: "plans", label: "Plans", step: "03" },
-  { id: "track", label: "Track", step: "04" },
-];
+const stageLabels: { id: AppStage; key: "baseline" | "diagnosis" | "plans"; step: string }[] =
+  [
+    { id: "baseline", key: "baseline", step: "01" },
+    { id: "diagnosis", key: "diagnosis", step: "02" },
+    { id: "plans", key: "plans", step: "03" },
+  ];
 
 const sourceCopy: Record<
   SourceKind,
-  { title: string; description: string; accept: string; icon: typeof FileImage }
+  {
+    title: "electricityBill" | "intervalData" | "applianceLabel";
+    description: "billDescription" | "intervalDescription" | "labelDescription";
+    accept: string;
+    icon: typeof FileImage;
+  }
 > = {
   bill: {
-    title: "Electricity bill",
-    description: "PNG, JPG or PDF",
+    title: "electricityBill",
+    description: "billDescription",
     accept: "image/*,.pdf",
     icon: FileImage,
   },
   interval: {
-    title: "Half-hour data",
-    description: "CSV with time + kWh",
+    title: "intervalData",
+    description: "intervalDescription",
     accept: ".csv,text/csv",
     icon: FileSpreadsheet,
   },
   label: {
-    title: "Appliance label",
-    description: "Energy label photo",
+    title: "applianceLabel",
+    description: "labelDescription",
     accept: "image/*",
     icon: Gauge,
   },
 };
+
+const specialistNames = [
+  "Consumption Detective",
+  "Appliance Auditor",
+  "Cost Optimizer",
+  "Comfort Guardian",
+  "Carbon Analyst",
+  "Plan and Action Coach",
+] as const;
 
 const sleep = (milliseconds: number) =>
   new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -108,39 +127,87 @@ function formatMoney(value: number) {
   }).format(value);
 }
 
+function numericValue(value: string, fallback = 0) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 export default function HomeShiftApp() {
   const [locale, setLocale] = useState<Locale>("en");
   const [stage, setStage] = useState<AppStage>("baseline");
-  const [loadPoints, setLoadPoints] = useState<LoadPoint[]>(generateDemoLoad);
+  const [profile, setProfile] = useState<HouseholdProfile>({ ...demoProfile });
+  const [bill, setBill] = useState<BillInput>({ ...demoBill });
+  const [appliances, setAppliances] = useState<ApplianceInputs>(() =>
+    structuredClone(demoAppliances),
+  );
+  const [parameters, setParameters] = useState<AnalysisParameters>({
+    ...demoParameters,
+  });
+  const [tariffEdited, setTariffEdited] = useState(false);
+  const [loadPoints, setLoadPoints] = useState<LoadPoint[]>(() =>
+    generateDemoLoad(),
+  );
+  const [quality, setQuality] = useState<LoadDataQuality>(() =>
+    assessLoadData(generateDemoLoad()),
+  );
   const [files, setFiles] = useState<Record<SourceKind, string>>({
-    bill: "synthetic_bill_may.png",
-    interval: "synthetic_half_hour.csv",
-    label: "synthetic_ac_label.jpg",
+    bill: "synthetic_bill_may.pdf",
+    interval: "synthetic_14_day_intervals.csv",
+    label: "synthetic_appliance_label.jpg",
   });
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [agentResult, setAgentResult] =
+    useState<AgentSuccessResponse | null>(null);
+  const [agentError, setAgentError] = useState("");
   const [traceVisible, setTraceVisible] = useState(0);
   const [selectedPlanId, setSelectedPlanId] =
-    useState<EnergyPlan["id"]>("balanced");
-  const [completedTasks, setCompletedTasks] = useState<number[]>([1, 2, 3]);
-  const [comparisonReady, setComparisonReady] = useState(false);
-  const [agentMode, setAgentMode] = useState<"demo" | "live">("demo");
+    useState<EnergyPlan["id"] | null>(null);
   const [toast, setToast] = useState("");
 
-  const sessionId = "homeshift-synthetic-household";
-  const patterns = useMemo(() => detectLoadPatterns(loadPoints), [loadPoints]);
-  const insights = useMemo(() => buildInsights(loadPoints), [loadPoints]);
-  const appliances = useMemo(() => estimateAppliances(demoProfile), []);
-  const plans = useMemo(() => generatePlans(demoProfile), []);
-  const selectedPlan =
-    plans.find((plan) => plan.id === selectedPlanId) ?? plans[1];
-  const comparison = compareActualToPlan(
-    demoProfile.monthlyKwh,
-    383.5,
-    selectedPlan,
+  const previewAnalysis = useMemo(() => {
+    try {
+      return analyzeHousehold(
+        profile,
+        bill,
+        appliances,
+        parameters,
+        loadPoints,
+      );
+    } catch {
+      return null;
+    }
+  }, [profile, bill, appliances, parameters, loadPoints]);
+
+  const chartPoints = useMemo(
+    () => aggregateDailyProfile(loadPoints),
+    [loadPoints],
   );
-  const baselineCost = calculateCost(demoProfile.monthlyKwh);
-  const baselineCarbon = calculateCarbon(demoProfile.monthlyKwh);
-  const progress = Math.round((completedTasks.length / dailyTasks.length) * 100);
+  const activeAnalysis = agentResult ?? previewAnalysis;
+  const baselineCarbon = calculateCarbon(
+    bill.totalKwh,
+    parameters.gridEmissionKgPerKwh,
+  );
+  const inputValid =
+    profile.householdName.trim().length > 0 &&
+    profile.homeType.trim().length > 0 &&
+    profile.residents > 0 &&
+    profile.comfortTemperature >= appliances.airConditioning.currentTemperature &&
+    profile.monthlyTargetPercent > 0 &&
+    bill.periodEnd >= bill.periodStart &&
+    bill.totalKwh > 0 &&
+    bill.totalCostSgd >= 0 &&
+    parameters.tariffSgdPerKwh > 0 &&
+    parameters.gridEmissionKgPerKwh > 0 &&
+    quality.dayCount >= 7 &&
+    quality.dayCount <= 30 &&
+    quality.coveragePercent >= 80;
+  const selectedPlan =
+    activeAnalysis?.plans.find((plan) => plan.id === selectedPlanId) ??
+    activeAnalysis?.plans.find(
+      (plan) => plan.id === agentResult?.decision.recommendedPlanId,
+    ) ??
+    null;
+  const isSynthetic = files.interval.startsWith("synthetic_");
 
   useEffect(() => {
     const saved = window.localStorage.getItem("homeshift-locale");
@@ -155,125 +222,175 @@ export default function HomeShiftApp() {
     window.localStorage.setItem("homeshift-locale", locale);
   }, [locale]);
 
+  function resetAnalysis() {
+    setAgentResult(null);
+    setAgentError("");
+    setSelectedPlanId(null);
+    setTraceVisible(0);
+    setStage("baseline");
+  }
+
   async function handleFile(kind: SourceKind, file?: File) {
     if (!file) return;
-    setFiles((current) => ({ ...current, [kind]: file.name }));
 
     if (kind === "interval") {
       try {
         const parsed = parseIntervalCsv(await file.text());
-        setLoadPoints(parsed);
-        showToast(`Loaded ${parsed.length} interval records`);
+        setLoadPoints(parsed.points);
+        setQuality(parsed.quality);
+        setFiles((current) => ({ ...current, interval: file.name }));
+        resetAnalysis();
+        showToast(
+          locale === "zh"
+            ? `已载入 ${parsed.quality.recordCount} 条半小时记录`
+            : `Loaded ${parsed.quality.recordCount} half-hour records`,
+        );
       } catch (error) {
         showToast(
-          error instanceof Error ? error.message : "Could not read the CSV",
+          error instanceof Error ? error.message : "Could not read the CSV.",
         );
       }
-    } else {
-      showToast(`${file.name} is ready for analysis`);
+      return;
     }
 
-    const form = new FormData();
-    form.set("file", file);
-    form.set("sessionId", sessionId);
-    form.set("kind", kind);
-    void fetch("/api/uploads", { method: "POST", body: form }).catch(() => {
-      // The interactive demo remains usable when local cloud bindings are absent.
-    });
+    setFiles((current) => ({ ...current, [kind]: file.name }));
+    showToast(
+      locale === "zh"
+        ? `${file.name} 已作为本地证据选择`
+        : `${file.name} selected as local evidence`,
+    );
   }
 
   function loadSyntheticDemo() {
-    setLoadPoints(generateDemoLoad());
+    const points = generateDemoLoad();
+    setProfile({ ...demoProfile });
+    setBill({ ...demoBill });
+    setAppliances(structuredClone(demoAppliances));
+    setParameters({ ...demoParameters });
+    setTariffEdited(false);
+    setLoadPoints(points);
+    setQuality(assessLoadData(points));
     setFiles({
-      bill: "synthetic_bill_may.png",
-      interval: "synthetic_half_hour.csv",
-      label: "synthetic_ac_label.jpg",
+      bill: "synthetic_bill_may.pdf",
+      interval: "synthetic_14_day_intervals.csv",
+      label: "synthetic_appliance_label.jpg",
     });
-    setStage("baseline");
-    setComparisonReady(false);
-    setCompletedTasks([1, 2, 3]);
-    showToast("Synthetic 4-room household reloaded");
+    resetAnalysis();
+    showToast(
+      locale === "zh"
+        ? "已重新载入完整合成案例"
+        : "Complete synthetic case reloaded",
+    );
+  }
+
+  function updateBill<K extends keyof BillInput>(key: K, value: BillInput[K]) {
+    const next = { ...bill, [key]: value };
+    setBill(next);
+    if (
+      !tariffEdited &&
+      next.totalKwh > 0 &&
+      (key === "totalKwh" || key === "totalCostSgd")
+    ) {
+      setParameters({
+        ...parameters,
+        tariffSgdPerKwh: Number(
+          (next.totalCostSgd / next.totalKwh).toFixed(4),
+        ),
+      });
+    }
+    resetAnalysis();
   }
 
   async function runDiagnosis() {
-    if (isAnalyzing) return;
+    if (isAnalyzing || !inputValid) {
+      if (!inputValid) showToast(t(locale, "cannotRun"));
+      return;
+    }
+
     setIsAnalyzing(true);
+    setAgentError("");
+    setAgentResult(null);
+    setSelectedPlanId(null);
     setTraceVisible(0);
     setStage("diagnosis");
 
-    const liveRequest = fetch("/api/agent", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        sessionId,
-        profile: demoProfile,
-        patterns,
-        requestedMode: "negotiate-plans",
-      }),
-    }).catch(() => null);
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 120_000);
 
-    for (let index = 1; index <= agentTrace.length; index += 1) {
-      await sleep(230);
-      setTraceVisible(index);
+    try {
+      const response = await fetch("/api/agent", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          locale,
+          profile,
+          bill,
+          appliances,
+          parameters,
+          loadPoints,
+        }),
+        signal: controller.signal,
+      });
+      const payload = (await response.json()) as
+        | AgentSuccessResponse
+        | AgentErrorResponse;
+
+      if (!response.ok || payload.mode !== "live") {
+        throw new Error(
+          payload.mode === "error"
+            ? liveAgentError(locale, payload.code, payload.message)
+            : locale === "zh"
+              ? "实时Agent运行未完成。"
+              : "The live agent run did not complete.",
+        );
+      }
+
+      setAgentResult(payload);
+      setSelectedPlanId(payload.decision.recommendedPlanId);
+      for (let index = 1; index <= payload.trace.length; index += 1) {
+        await sleep(130);
+        setTraceVisible(index);
+      }
+    } catch (error) {
+      setAgentError(
+        error instanceof DOMException && error.name === "AbortError"
+          ? locale === "zh"
+            ? "实时Agent运行超时，请检查网络后重试。"
+            : "The live agent run timed out. Check the connection and retry."
+          : error instanceof Error
+            ? error.message
+            : locale === "zh"
+              ? "实时Agent运行未完成。"
+              : "The live agent run did not complete.",
+      );
+    } finally {
+      window.clearTimeout(timeout);
+      setIsAnalyzing(false);
     }
-
-    const response = await liveRequest;
-    setAgentMode(response?.ok ? "live" : "demo");
-    setIsAnalyzing(false);
-
-    void fetch("/api/sessions", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        id: sessionId,
-        householdName: "Tampines 4-room household",
-        profile: demoProfile,
-        baseline: { patterns, appliances, insights },
-        plans,
-        selectedPlan: selectedPlanId,
-      }),
-    }).catch(() => null);
   }
 
   function choosePlan(plan: EnergyPlan) {
     setSelectedPlanId(plan.id);
-    setStage("track");
-    setComparisonReady(false);
-    showToast(`${plan.name} plan selected`);
+    showToast(t(locale, "selectedReady"));
   }
 
-  function toggleTask(day: number) {
-    setCompletedTasks((current) =>
-      current.includes(day)
-        ? current.filter((item) => item !== day)
-        : [...current, day].sort(),
-    );
-  }
-
-  async function verifyAfterData() {
-    setComparisonReady(true);
-    setCompletedTasks(dailyTasks.map((task) => task.day));
-    showToast("Day-7 data verified — next week has been adjusted");
-
-    void fetch("/api/check-in", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        sessionId,
-        payload: { completedDays: 7, comfortScore: 4.6 },
-        result: comparison,
-      }),
-    }).catch(() => null);
+  function downloadTemplate() {
+    const blob = new Blob([demoCsvTemplate()], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "homeshift-half-hour-template.csv";
+    anchor.click();
+    URL.revokeObjectURL(url);
   }
 
   function showToast(message: string) {
-    setToast(translate(locale, message));
-    window.setTimeout(() => setToast(""), 2600);
+    setToast(message);
+    window.setTimeout(() => setToast(""), 3200);
   }
 
   return (
-    <Localized locale={locale}>
-      <main className="app-shell">
+    <main className="app-shell">
       <header className="topbar">
         <button
           className="brand"
@@ -291,29 +408,44 @@ export default function HomeShiftApp() {
             <button
               key={item.id}
               className={stage === item.id ? "active" : ""}
+              disabled={item.id !== "baseline" && !agentResult}
               onClick={() => setStage(item.id)}
             >
               <span>{item.step}</span>
-              {item.label}
+              {t(locale, item.key)}
             </button>
           ))}
         </nav>
 
         <div className="top-actions">
-          <span className="demo-pill">
+          <span className={`demo-pill ${isSynthetic ? "" : "real"}`}>
             <Sparkles size={13} />
-            Synthetic demo
+            {isSynthetic
+              ? t(locale, "syntheticDemo")
+              : locale === "zh"
+                ? "真实数据案例"
+                : "Real-data case"}
           </span>
           <button
             className="language-button"
-            onClick={() => setLocale((current) => current === "en" ? "zh" : "en")}
-            aria-label={locale === "en" ? "切换到中文" : "Switch to English"}
+            onClick={() =>
+              setLocale((current) => (current === "en" ? "zh" : "en"))
+            }
+            aria-label={
+              locale === "en"
+                ? t(locale, "switchChinese")
+                : t(locale, "switchEnglish")
+            }
             data-testid="language-toggle"
           >
             <Languages size={15} />
             <span>{locale === "en" ? "中文" : "EN"}</span>
           </button>
-          <button className="icon-button" onClick={loadSyntheticDemo} title="Reset demo">
+          <button
+            className="icon-button"
+            onClick={loadSyntheticDemo}
+            title={t(locale, "reloadSynthetic")}
+          >
             <RefreshCw size={17} />
           </button>
         </div>
@@ -323,13 +455,33 @@ export default function HomeShiftApp() {
         {stage === "baseline" && (
           <BaselineView
             locale={locale}
-            loadPoints={loadPoints}
+            profile={profile}
+            setProfile={(next) => {
+              setProfile(next);
+              resetAnalysis();
+            }}
+            bill={bill}
+            updateBill={updateBill}
+            appliances={appliances}
+            setAppliances={(next) => {
+              setAppliances(next);
+              resetAnalysis();
+            }}
+            parameters={parameters}
+            setParameters={(next) => {
+              setParameters(next);
+              resetAnalysis();
+            }}
+            setTariffEdited={setTariffEdited}
             files={files}
-            patterns={patterns}
-            baselineCost={baselineCost}
+            quality={quality}
+            chartPoints={chartPoints}
+            patterns={previewAnalysis?.patterns ?? null}
             baselineCarbon={baselineCarbon}
+            inputValid={inputValid}
             onFile={handleFile}
             onLoadDemo={loadSyntheticDemo}
+            onDownloadTemplate={downloadTemplate}
             onAnalyze={runDiagnosis}
             isAnalyzing={isAnalyzing}
           />
@@ -338,36 +490,27 @@ export default function HomeShiftApp() {
         {stage === "diagnosis" && (
           <DiagnosisView
             locale={locale}
-            loadPoints={loadPoints}
-            insights={insights}
-            appliances={appliances}
+            chartPoints={chartPoints}
+            analysis={agentResult ?? previewAnalysis}
+            result={agentResult}
+            error={agentError}
             traceVisible={traceVisible}
             isAnalyzing={isAnalyzing}
-            agentMode={agentMode}
+            onRetry={runDiagnosis}
             onContinue={() => setStage("plans")}
           />
         )}
 
-        {stage === "plans" && (
+        {stage === "plans" && agentResult && (
           <PlansView
             locale={locale}
-            plans={plans}
+            result={agentResult}
             selectedPlanId={selectedPlanId}
-            onSelect={setSelectedPlanId}
-            onChoose={choosePlan}
-          />
-        )}
-
-        {stage === "track" && (
-          <TrackView
-            locale={locale}
-            plan={selectedPlan}
-            completedTasks={completedTasks}
-            progress={progress}
-            comparisonReady={comparisonReady}
-            comparison={comparison}
-            onToggleTask={toggleTask}
-            onVerify={verifyAfterData}
+            selectedPlan={selectedPlan}
+            parameters={parameters}
+            profile={profile}
+            bill={bill}
+            onSelect={choosePlan}
           />
         )}
       </section>
@@ -375,9 +518,9 @@ export default function HomeShiftApp() {
       <footer className="site-footer">
         <span>
           <ShieldCheck size={14} />
-          Estimates are tool-calculated. No appliance is controlled automatically.
+          {t(locale, "footer")}
         </span>
-        <span>Prototype · Agentic AI in Sustainability</span>
+        <span>{t(locale, "prototype")}</span>
       </footer>
 
       {toast && (
@@ -386,62 +529,84 @@ export default function HomeShiftApp() {
           {toast}
         </div>
       )}
-      </main>
-    </Localized>
+    </main>
   );
 }
 
 function BaselineView({
   locale,
-  loadPoints,
+  profile,
+  setProfile,
+  bill,
+  updateBill,
+  appliances,
+  setAppliances,
+  parameters,
+  setParameters,
+  setTariffEdited,
   files,
+  quality,
+  chartPoints,
   patterns,
-  baselineCost,
   baselineCarbon,
+  inputValid,
   onFile,
   onLoadDemo,
+  onDownloadTemplate,
   onAnalyze,
   isAnalyzing,
 }: {
   locale: Locale;
-  loadPoints: LoadPoint[];
+  profile: HouseholdProfile;
+  setProfile: (value: HouseholdProfile) => void;
+  bill: BillInput;
+  updateBill: <K extends keyof BillInput>(key: K, value: BillInput[K]) => void;
+  appliances: ApplianceInputs;
+  setAppliances: (value: ApplianceInputs) => void;
+  parameters: AnalysisParameters;
+  setParameters: (value: AnalysisParameters) => void;
+  setTariffEdited: (value: boolean) => void;
   files: Record<SourceKind, string>;
-  patterns: ReturnType<typeof detectLoadPatterns>;
-  baselineCost: number;
+  quality: LoadDataQuality;
+  chartPoints: LoadPoint[];
+  patterns: AgentSuccessResponse["patterns"] | null;
   baselineCarbon: number;
+  inputValid: boolean;
   onFile: (kind: SourceKind, file?: File) => void;
   onLoadDemo: () => void;
+  onDownloadTemplate: () => void;
   onAnalyze: () => void;
   isAnalyzing: boolean;
 }) {
+  const readySources = Object.values(files).filter(Boolean).length;
+
   return (
-    <Localized locale={locale}>
-      <div className="view-stack">
+    <div className="view-stack">
       <div className="eyebrow-row">
-        <span className="eyebrow">HOUSEHOLD ENERGY COPILOT</span>
-        <span className="live-dot">
+        <span className="eyebrow">{t(locale, "eyebrow")}</span>
+        <span className={`live-dot ${inputValid ? "" : "warning"}`}>
           <span />
-          Data ready
+          {inputValid
+            ? t(locale, "dataReady")
+            : t(locale, "dataNeedsAttention")}
         </span>
       </div>
 
       <section className="hero-grid">
         <div className="hero-copy">
-          <p className="kicker">Cut bills, not comfort.</p>
+          <p className="kicker">{t(locale, "kicker")}</p>
           <h1>
-            Turn your energy data into a plan your household will{" "}
-            <em>actually follow.</em>
+            {t(locale, "heroTitle")}{" "}
+            <em>{t(locale, "heroAccent")}</em>
           </h1>
           <p className="hero-description">
-            Seven specialist agents diagnose what drives your bill, negotiate
-            cost against comfort and carbon, then adapt a practical seven-day
-            plan as new data arrives.
+            {t(locale, "heroDescription")}
           </p>
           <div className="hero-actions">
             <button
               className="primary-button"
               onClick={onAnalyze}
-              disabled={isAnalyzing}
+              disabled={isAnalyzing || !inputValid}
               data-testid="run-diagnosis"
             >
               {isAnalyzing ? (
@@ -449,19 +614,22 @@ function BaselineView({
               ) : (
                 <WandSparkles size={18} />
               )}
-              Run 7-agent diagnosis
+              {isAnalyzing
+                ? t(locale, "runningAgents")
+                : t(locale, "runDiagnosis")}
               <ArrowRight size={17} />
             </button>
             <button className="text-button" onClick={onLoadDemo}>
-              Reload synthetic case
+              {t(locale, "reloadSynthetic")}
             </button>
           </div>
+          {!inputValid && <p className="form-hint error">{t(locale, "cannotRun")}</p>}
           <div className="trust-row">
             <span>
-              <LockKeyhole size={14} /> User-confirmed actions only
+              <LockKeyhole size={14} /> {t(locale, "userConfirmed")}
             </span>
             <span>
-              <Database size={14} /> Deterministic calculations
+              <Database size={14} /> {t(locale, "deterministic")}
             </span>
           </div>
         </div>
@@ -469,43 +637,52 @@ function BaselineView({
         <div className="baseline-card">
           <div className="baseline-card-head">
             <div>
-              <span className="label">MAY BASELINE</span>
-              <h2>Tampines household</h2>
+              <span className="label">{t(locale, "monthlyBaseline")}</span>
+              <h2>{profile.householdName}</h2>
             </div>
             <span className="verified-badge">
-              <Check size={13} /> 3 sources
+              <Check size={13} /> {readySources} {t(locale, "sourcesReady")}
             </span>
           </div>
           <div className="big-metric">
-            <span>420</span>
+            <span>{bill.totalKwh.toLocaleString()}</span>
             <div>
               <strong>kWh</strong>
-              <small>this month</small>
+              <small>{t(locale, "thisMonth")}</small>
             </div>
           </div>
-          <div className="goal-track" aria-label="10 percent reduction goal">
-            <span style={{ width: "70%" }} />
-            <i style={{ left: "60%" }}>goal</i>
+          <div
+            className="goal-track"
+            aria-label={`${profile.monthlyTargetPercent}% reduction goal`}
+          >
+            <span style={{ width: `${Math.min(100, profile.monthlyTargetPercent * 5)}%` }} />
+            <i style={{ left: `${Math.min(92, profile.monthlyTargetPercent * 5)}%` }}>
+              {t(locale, "target")}
+            </i>
           </div>
           <div className="mini-metrics">
             <div>
-              <span>Est. bill</span>
-              <strong>{formatMoney(baselineCost)}</strong>
+              <span>{t(locale, "estimatedBill")}</span>
+              <strong>{formatMoney(bill.totalCostSgd)}</strong>
             </div>
             <div>
-              <span>Carbon</span>
+              <span>{t(locale, "carbon")}</span>
               <strong>{baselineCarbon} kg</strong>
             </div>
             <div>
-              <span>Target</span>
-              <strong>−10%</strong>
+              <span>{t(locale, "target")}</span>
+              <strong>−{profile.monthlyTargetPercent}%</strong>
             </div>
           </div>
           <div className="home-profile">
             <Home size={17} />
-            <span>4-room HDB</span>
-            <span>3 residents</span>
-            <span>1 WFH</span>
+            <span>{profile.homeType}</span>
+            <span>
+              {profile.residents} {t(locale, "residents")}
+            </span>
+            <span>
+              {profile.workFromHome ? t(locale, "wfh") : t(locale, "noWfh")}
+            </span>
           </div>
         </div>
       </section>
@@ -514,24 +691,24 @@ function BaselineView({
         <div className="panel load-panel">
           <div className="panel-heading">
             <div>
-              <span className="label">24-HOUR SIGNATURE</span>
-              <h2>When the home uses energy</h2>
+              <span className="label">{t(locale, "dailySignature")}</span>
+              <h2>{t(locale, "energyTiming")}</h2>
             </div>
             <span className="signal-chip">
-              Peak {patterns.peakTime}
+              {t(locale, "peak")} {patterns?.peakTime ?? "—"}
             </span>
           </div>
-          <LoadChart points={loadPoints} />
+          <LoadChart points={chartPoints} />
           <div className="chart-notes">
             <span>
-              <i className="dot lime" /> Daytime
+              <i className="dot lime" /> {t(locale, "averageProfile")}
             </span>
             <span>
-              <i className="dot coral" /> Evening opportunity
+              <i className="dot coral" /> {t(locale, "eveningOpportunity")}
             </span>
             <span className="chart-summary">
               <MoonStar size={14} />
-              Overnight remains above target
+              {t(locale, "overnightMeasured")}
             </span>
           </div>
         </div>
@@ -539,10 +716,10 @@ function BaselineView({
         <div className="panel source-panel">
           <div className="panel-heading">
             <div>
-              <span className="label">DATA DESK</span>
-              <h2>Bring your evidence</h2>
+              <span className="label">{t(locale, "dataDesk")}</span>
+              <h2>{t(locale, "bringEvidence")}</h2>
             </div>
-            <InfoTooltip text="Demo files are synthetic. Real uploads are stored privately when cloud storage is connected." />
+            <InfoTooltip text={t(locale, "manualEvidence")} />
           </div>
           <div className="upload-list">
             {(Object.keys(sourceCopy) as SourceKind[]).map((kind) => {
@@ -554,8 +731,10 @@ function BaselineView({
                     <Icon size={19} />
                   </span>
                   <span className="upload-copy">
-                    <strong>{source.title}</strong>
-                    <small>{files[kind] || source.description}</small>
+                    <strong>{t(locale, source.title)}</strong>
+                    <small>
+                      {files[kind] || t(locale, source.description)}
+                    </small>
                   </span>
                   <span className="upload-state">
                     {files[kind] ? <Check size={15} /> : <Upload size={15} />}
@@ -563,533 +742,918 @@ function BaselineView({
                   <input
                     type="file"
                     accept={source.accept}
-                    onChange={(event) => onFile(kind, event.target.files?.[0])}
+                    onChange={(event) =>
+                      onFile(kind, event.target.files?.[0])
+                    }
                   />
                 </label>
               );
             })}
           </div>
-          <div className="constraint-strip">
-            <Thermometer size={17} />
-            <div>
-              <strong>Comfort rules locked</strong>
-              <span>25°C sleep · WFH protected · ≤ S$300</span>
-            </div>
-            <ChevronRight size={17} />
-          </div>
+          <button className="template-button" onClick={onDownloadTemplate}>
+            <Download size={15} />
+            {t(locale, "downloadTemplate")}
+          </button>
+          <DataQualityCard locale={locale} quality={quality} />
         </div>
       </section>
-      </div>
-    </Localized>
+
+      <details className="panel setup-panel" open>
+        <summary>
+          <div>
+            <span className="label">{t(locale, "calculationBasis")}</span>
+            <h2>{t(locale, "setupTitle")}</h2>
+            <p>{t(locale, "setupDescription")}</p>
+          </div>
+          <ChevronRight size={19} />
+        </summary>
+
+        <div className="setup-groups">
+          <fieldset>
+            <legend>{t(locale, "householdSection")}</legend>
+            <div className="form-grid">
+              <Field label={t(locale, "householdName")} wide>
+                <input
+                  value={profile.householdName}
+                  onChange={(event) =>
+                    setProfile({ ...profile, householdName: event.target.value })
+                  }
+                />
+              </Field>
+              <Field label={t(locale, "homeType")} wide>
+                <input
+                  value={profile.homeType}
+                  onChange={(event) =>
+                    setProfile({ ...profile, homeType: event.target.value })
+                  }
+                />
+              </Field>
+              <NumberField
+                label={t(locale, "residentCount")}
+                value={profile.residents}
+                min={1}
+                max={20}
+                step={1}
+                onChange={(value) =>
+                  setProfile({ ...profile, residents: value })
+                }
+              />
+              <Field label={t(locale, "workFromHome")}>
+                <label className="toggle-field">
+                  <input
+                    type="checkbox"
+                    checked={profile.workFromHome}
+                    onChange={(event) =>
+                      setProfile({
+                        ...profile,
+                        workFromHome: event.target.checked,
+                      })
+                    }
+                  />
+                  <span>
+                    {profile.workFromHome
+                      ? locale === "zh" ? "是" : "Yes"
+                      : locale === "zh" ? "否" : "No"}
+                  </span>
+                </label>
+              </Field>
+              <NumberField
+                label={t(locale, "maxSleepTemperature")}
+                value={profile.comfortTemperature}
+                min={20}
+                max={30}
+                step={0.5}
+                onChange={(value) =>
+                  setProfile({ ...profile, comfortTemperature: value })
+                }
+              />
+              <NumberField
+                label={t(locale, "budget")}
+                value={profile.budgetSgd}
+                min={0}
+                step={10}
+                onChange={(value) =>
+                  setProfile({ ...profile, budgetSgd: value })
+                }
+              />
+              <NumberField
+                label={t(locale, "reductionTarget")}
+                value={profile.monthlyTargetPercent}
+                min={1}
+                max={30}
+                step={1}
+                onChange={(value) =>
+                  setProfile({ ...profile, monthlyTargetPercent: value })
+                }
+              />
+            </div>
+          </fieldset>
+
+          <fieldset>
+            <legend>{t(locale, "billSection")}</legend>
+            <div className="form-grid">
+              <Field label={t(locale, "periodStart")}>
+                <input
+                  type="date"
+                  value={bill.periodStart}
+                  onChange={(event) =>
+                    updateBill("periodStart", event.target.value)
+                  }
+                />
+              </Field>
+              <Field label={t(locale, "periodEnd")}>
+                <input
+                  type="date"
+                  value={bill.periodEnd}
+                  onChange={(event) =>
+                    updateBill("periodEnd", event.target.value)
+                  }
+                />
+              </Field>
+              <NumberField
+                label={t(locale, "totalKwh")}
+                value={bill.totalKwh}
+                min={0.1}
+                step={0.1}
+                onChange={(value) => updateBill("totalKwh", value)}
+              />
+              <NumberField
+                label={t(locale, "totalCost")}
+                value={bill.totalCostSgd}
+                min={0}
+                step={0.01}
+                onChange={(value) => updateBill("totalCostSgd", value)}
+              />
+              <NumberField
+                label={t(locale, "tariff")}
+                value={parameters.tariffSgdPerKwh}
+                min={0.0001}
+                step={0.0001}
+                onChange={(value) => {
+                  setTariffEdited(true);
+                  setParameters({ ...parameters, tariffSgdPerKwh: value });
+                }}
+              />
+              <NumberField
+                label={t(locale, "gridFactor")}
+                value={parameters.gridEmissionKgPerKwh}
+                min={0.0001}
+                step={0.001}
+                onChange={(value) =>
+                  setParameters({
+                    ...parameters,
+                    gridEmissionKgPerKwh: value,
+                  })
+                }
+              />
+            </div>
+          </fieldset>
+
+          <fieldset>
+            <legend>{t(locale, "applianceSection")}</legend>
+            <div className="form-grid">
+              <NumberField
+                label={t(locale, "acQuantity")}
+                value={appliances.airConditioning.quantity}
+                min={0}
+                max={20}
+                step={1}
+                onChange={(value) =>
+                  setAppliances({
+                    ...appliances,
+                    airConditioning: {
+                      ...appliances.airConditioning,
+                      quantity: value,
+                    },
+                  })
+                }
+              />
+              <NumberField
+                label={t(locale, "acPower")}
+                value={appliances.airConditioning.ratedPowerKw}
+                min={0}
+                step={0.1}
+                onChange={(value) =>
+                  setAppliances({
+                    ...appliances,
+                    airConditioning: {
+                      ...appliances.airConditioning,
+                      ratedPowerKw: value,
+                    },
+                  })
+                }
+              />
+              <NumberField
+                label={t(locale, "acHours")}
+                value={appliances.airConditioning.hoursPerDay}
+                min={0}
+                max={24}
+                step={0.5}
+                onChange={(value) =>
+                  setAppliances({
+                    ...appliances,
+                    airConditioning: {
+                      ...appliances.airConditioning,
+                      hoursPerDay: value,
+                    },
+                  })
+                }
+              />
+              <NumberField
+                label={t(locale, "acTemperature")}
+                value={appliances.airConditioning.currentTemperature}
+                min={16}
+                max={30}
+                step={0.5}
+                onChange={(value) =>
+                  setAppliances({
+                    ...appliances,
+                    airConditioning: {
+                      ...appliances.airConditioning,
+                      currentTemperature: value,
+                    },
+                  })
+                }
+              />
+              <NumberField
+                label={t(locale, "refrigeratorAnnual")}
+                value={appliances.refrigerator.annualKwh}
+                min={0}
+                step={1}
+                onChange={(value) =>
+                  setAppliances({
+                    ...appliances,
+                    refrigerator: {
+                      ...appliances.refrigerator,
+                      annualKwh: value,
+                    },
+                  })
+                }
+              />
+              <NumberField
+                label={t(locale, "refrigeratorCost")}
+                value={appliances.refrigerator.replacementCostSgd}
+                min={0}
+                step={10}
+                onChange={(value) =>
+                  setAppliances({
+                    ...appliances,
+                    refrigerator: {
+                      ...appliances.refrigerator,
+                      replacementCostSgd: value,
+                    },
+                  })
+                }
+              />
+              <NumberField
+                label={t(locale, "heaterPower")}
+                value={appliances.waterHeater.ratedPowerKw}
+                min={0}
+                step={0.1}
+                onChange={(value) =>
+                  setAppliances({
+                    ...appliances,
+                    waterHeater: {
+                      ...appliances.waterHeater,
+                      ratedPowerKw: value,
+                    },
+                  })
+                }
+              />
+              <NumberField
+                label={t(locale, "heaterMinutes")}
+                value={appliances.waterHeater.minutesPerDay}
+                min={0}
+                step={1}
+                onChange={(value) =>
+                  setAppliances({
+                    ...appliances,
+                    waterHeater: {
+                      ...appliances.waterHeater,
+                      minutesPerDay: value,
+                    },
+                  })
+                }
+              />
+              <NumberField
+                label={t(locale, "washerCycle")}
+                value={appliances.washingMachine.kwhPerCycle}
+                min={0}
+                step={0.1}
+                onChange={(value) =>
+                  setAppliances({
+                    ...appliances,
+                    washingMachine: {
+                      ...appliances.washingMachine,
+                      kwhPerCycle: value,
+                    },
+                  })
+                }
+              />
+              <NumberField
+                label={t(locale, "washerWeekly")}
+                value={appliances.washingMachine.cyclesPerWeek}
+                min={0}
+                step={1}
+                onChange={(value) =>
+                  setAppliances({
+                    ...appliances,
+                    washingMachine: {
+                      ...appliances.washingMachine,
+                      cyclesPerWeek: value,
+                    },
+                  })
+                }
+              />
+              <NumberField
+                label={t(locale, "otherEnergy")}
+                value={appliances.otherMonthlyKwh}
+                min={0}
+                step={1}
+                onChange={(value) =>
+                  setAppliances({ ...appliances, otherMonthlyKwh: value })
+                }
+              />
+            </div>
+          </fieldset>
+        </div>
+        <p className="manual-note">
+          <Info size={15} />
+          {t(locale, "manualValues")}
+        </p>
+      </details>
+    </div>
   );
 }
 
 function DiagnosisView({
   locale,
-  loadPoints,
-  insights,
-  appliances,
+  chartPoints,
+  analysis,
+  result,
+  error,
   traceVisible,
   isAnalyzing,
-  agentMode,
+  onRetry,
   onContinue,
 }: {
   locale: Locale;
-  loadPoints: LoadPoint[];
-  insights: ReturnType<typeof buildInsights>;
-  appliances: ReturnType<typeof estimateAppliances>;
+  chartPoints: LoadPoint[];
+  analysis: AgentSuccessResponse | ReturnType<typeof analyzeHousehold> | null;
+  result: AgentSuccessResponse | null;
+  error: string;
   traceVisible: number;
   isAnalyzing: boolean;
-  agentMode: "demo" | "live";
+  onRetry: () => void;
   onContinue: () => void;
 }) {
+  const trace = result?.trace ?? [];
+  const decision = result?.decision;
+
   return (
-    <Localized locale={locale}>
-      <div className="view-stack">
+    <div className="view-stack">
       <PageIntro
-        eyebrow="DIAGNOSIS"
-        title="The bill is high for"
-        accent="three specific reasons."
-        description="HomeShift separates measured evidence from estimates, then shows how each specialist reached an actionable conclusion."
+        eyebrow={t(locale, "diagnosisEyebrow")}
+        title={t(locale, "diagnosisTitle")}
+        accent={t(locale, "diagnosisAccent")}
+        description={t(locale, "diagnosisDescription")}
         side={
-          <span className={`mode-badge ${agentMode}`}>
-            {agentMode === "live" ? <Activity size={14} /> : <Database size={14} />}
-            {agentMode === "live" ? "Live agent run" : "Transparent demo engine"}
+          <span className="mode-badge live">
+            <Activity size={14} />
+            {t(locale, "liveAgentRun")}
           </span>
         }
       />
+
+      {error && (
+        <div className="agent-error" role="alert">
+          <AlertCircle size={21} />
+          <div>
+            <strong>
+              {locale === "zh" ? "实时分析未完成" : "Live analysis did not complete"}
+            </strong>
+            <span>{error}</span>
+          </div>
+          <button className="secondary-button" onClick={onRetry}>
+            <RefreshCw size={15} />
+            {t(locale, "retry")}
+          </button>
+        </div>
+      )}
 
       <section className="diagnosis-grid">
         <div className="panel trace-panel">
           <div className="panel-heading">
             <div>
-              <span className="label">AGENT WORKLOG</span>
-              <h2>Six specialists, one decision</h2>
+              <span className="label">{t(locale, "agentWorklog")}</span>
+              <h2>{t(locale, "sixSpecialists")}</h2>
             </div>
             {isAnalyzing && <LoaderCircle className="spin" size={19} />}
           </div>
           <div className="trace-list">
-            {agentTrace.map((entry, index) => {
-              const visible = index < traceVisible;
+            {(result ? trace : specialistNames).map((entry, index) => {
+              const finding = typeof entry === "string" ? null : entry;
+              const agentName =
+                typeof entry === "string" ? entry : entry.agent;
+              const visible = Boolean(result) && index < traceVisible;
               return (
                 <div
                   className={`trace-row ${visible ? "visible" : ""}`}
-                  key={entry.agent}
+                  key={agentName}
                 >
                   <span className="trace-index">
                     {visible ? <Check size={14} /> : index + 1}
                   </span>
                   <div>
-                    <strong>{entry.agent}</strong>
-                    <span>{entry.task}</span>
+                    <strong>{agentName}</strong>
+                    <span>
+                      {visible
+                        ? finding?.task
+                        : t(locale, "waitingForAgents")}
+                    </span>
                   </div>
-                  <p>{visible ? entry.result : "Waiting for upstream evidence"}</p>
+                  <p>
+                    {visible ? (
+                      <>
+                        {finding?.result}
+                        <small className="evidence-chip">
+                          {evidenceLabel(locale, finding?.evidence)}
+                        </small>
+                      </>
+                    ) : (
+                      "—"
+                    )}
+                  </p>
                 </div>
               );
             })}
           </div>
-          <div className="orchestrator-note">
-            <Sparkles size={18} />
-            <div>
-              <strong>Orchestrator decision</strong>
-              <span>
-                Preserve sleep comfort, avoid purchases in week one, and target
-                the evening cooling peak first.
-              </span>
+
+          {decision && (
+            <div className="orchestrator-note">
+              <Sparkles size={18} />
+              <div>
+                <strong>{t(locale, "orchestratorDecision")}</strong>
+                <span>
+                  {planName(locale, decision.recommendedPlanId)} ·{" "}
+                  {decision.rationale[0]}
+                </span>
+              </div>
             </div>
-          </div>
+          )}
         </div>
 
         <div className="panel compact-chart-panel">
           <div className="panel-heading">
             <div>
-              <span className="label">DETECTIVE VIEW</span>
-              <h2>Peak concentration</h2>
+              <span className="label">{t(locale, "detectiveView")}</span>
+              <h2>{t(locale, "peakConcentration")}</h2>
             </div>
             <BarChart3 size={19} />
           </div>
-          <LoadChart points={loadPoints} compact />
-          <div className="peak-callout">
-            <Zap size={18} />
-            <span>
-              <strong>38% cooling share</strong>
-              Most addressable after 19:00
-            </span>
-          </div>
-        </div>
-      </section>
-
-      <section className="insight-row">
-        {insights.map((insight, index) => (
-          <article className={`insight-card severity-${insight.severity}`} key={insight.id}>
-            <div className="insight-top">
-              <span>0{index + 1}</span>
-              <strong>{insight.confidence}% confidence</strong>
+          <LoadChart points={chartPoints} />
+          {analysis && (
+            <div className="fact-grid">
+              <span>
+                <small>{t(locale, "peak")}</small>
+                <strong>{analysis.patterns.peakTime}</strong>
+              </span>
+              <span>
+                <small>{locale === "zh" ? "晚间占比" : "Evening share"}</small>
+                <strong>{analysis.patterns.eveningSharePercent}%</strong>
+              </span>
+              <span>
+                <small>{locale === "zh" ? "日均用电" : "Daily average"}</small>
+                <strong>{analysis.patterns.dailyAverageKwh} kWh</strong>
+              </span>
             </div>
-            <h3>{insight.title}</h3>
-            <p>{insight.detail}</p>
-            <small>
-              <Info size={13} />
-              {insight.evidence}
-            </small>
-          </article>
-        ))}
+          )}
+        </div>
       </section>
 
-      <section className="panel appliance-panel">
-        <div className="panel-heading">
-          <div>
-            <span className="label">APPLIANCE AUDIT</span>
-            <h2>Estimated monthly contribution</h2>
-          </div>
-          <span className="estimation-note">Measured + label-informed estimates</span>
-        </div>
-        <div className="appliance-bars">
-          {appliances.map((appliance) => (
-            <div className="appliance-item" key={appliance.name}>
-              <span>{appliance.name}</span>
+      {analysis && (
+        <>
+          <section className="insight-grid">
+            {analysis.insights.map((insight) => (
+              <InsightCard key={insight.id} insight={insight} locale={locale} />
+            ))}
+          </section>
+
+          <section className="panel appliance-panel">
+            <div className="panel-heading">
               <div>
-                <i style={{ width: `${appliance.sharePercent * 1.75}%` }} />
+                <span className="label">{t(locale, "applianceAudit")}</span>
+                <h2>{t(locale, "estimatedContribution")}</h2>
               </div>
-              <strong>{appliance.monthlyKwh} kWh</strong>
-              <InfoTooltip text={appliance.basis} />
+              <Gauge size={19} />
             </div>
-          ))}
-        </div>
-      </section>
+            <div className="appliance-list">
+              {analysis.applianceEstimates.map((appliance) => (
+                <div className="appliance-row" key={appliance.key}>
+                  <div>
+                    <strong>{applianceName(locale, appliance.key)}</strong>
+                    <span>
+                      {applianceBasis(
+                        locale,
+                        appliance.key,
+                        appliance.normalized,
+                      )}
+                    </span>
+                  </div>
+                  <div className="appliance-bar">
+                    <span
+                      style={{
+                        width: `${Math.min(100, appliance.sharePercent)}%`,
+                      }}
+                    />
+                  </div>
+                  <b>{appliance.monthlyKwh} kWh</b>
+                  <small>
+                    {appliance.sharePercent}%
+                    {appliance.normalized
+                      ? ` · ${t(locale, "normalized")}`
+                      : ""}
+                  </small>
+                </div>
+              ))}
+            </div>
+          </section>
+        </>
+      )}
 
-      <div className="continue-row">
-        <span>
-          Diagnosis complete. All three proposed pathways satisfy the S$300
-          hard budget limit.
-        </span>
+      {decision && (
+        <section className="decision-grid">
+          <DecisionList
+            icon={<Sparkles size={17} />}
+            title={t(locale, "rationale")}
+            items={decision.rationale}
+          />
+          <DecisionList
+            icon={<ShieldCheck size={17} />}
+            title={t(locale, "rejectedRisks")}
+            items={
+              decision.rejectedRisks.length
+                ? decision.rejectedRisks
+                : [t(locale, "noRejectedRisks")]
+            }
+          />
+          <DecisionList
+            icon={<ArrowRight size={17} />}
+            title={t(locale, "nextActions")}
+            items={decision.nextActions}
+          />
+        </section>
+      )}
+
+      <div className="view-actions">
         <button
           className="primary-button"
           onClick={onContinue}
-          disabled={isAnalyzing}
-          data-testid="view-plans"
+          disabled={!result}
         >
-          Compare three plans
+          {t(locale, "continuePlans")}
           <ArrowRight size={17} />
         </button>
       </div>
-      </div>
-    </Localized>
+    </div>
   );
 }
 
 function PlansView({
   locale,
-  plans,
+  result,
   selectedPlanId,
+  selectedPlan,
+  parameters,
+  profile,
+  bill,
   onSelect,
-  onChoose,
 }: {
   locale: Locale;
-  plans: EnergyPlan[];
-  selectedPlanId: EnergyPlan["id"];
-  onSelect: (id: EnergyPlan["id"]) => void;
-  onChoose: (plan: EnergyPlan) => void;
+  result: AgentSuccessResponse;
+  selectedPlanId: EnergyPlan["id"] | null;
+  selectedPlan: EnergyPlan | null;
+  parameters: AnalysisParameters;
+  profile: HouseholdProfile;
+  bill: BillInput;
+  onSelect: (plan: EnergyPlan) => void;
 }) {
   return (
-    <Localized locale={locale}>
-      <div className="view-stack">
+    <div className="view-stack">
       <PageIntro
-        eyebrow="NEGOTIATED OPTIONS"
-        title="Choose the trade-off,"
-        accent="not a generic tip."
-        description="Cost, comfort and carbon agents score every measure. Hard constraints are enforced before a plan reaches you."
+        eyebrow={t(locale, "plansEyebrow")}
+        title={t(locale, "plansTitle")}
+        accent={t(locale, "plansAccent")}
+        description={t(locale, "plansDescription")}
         side={
-          <div className="constraint-badges">
-            <span><MoonStar size={13} /> Sleep protected</span>
-            <span><CircleDollarSign size={13} /> Under S$300</span>
+          <div className="parameter-chip">
+            S${parameters.tariffSgdPerKwh.toFixed(4)}/kWh ·{" "}
+            {parameters.gridEmissionKgPerKwh.toFixed(3)} kg CO₂/kWh
           </div>
         }
       />
 
       <section className="plan-grid">
-        {plans.map((plan) => {
+        {result.plans.map((plan) => {
+          const recommended =
+            plan.id === result.decision.recommendedPlanId;
           const selected = plan.id === selectedPlanId;
           return (
             <article
-              className={`plan-card ${selected ? "selected" : ""}`}
-              style={{ "--plan-accent": plan.accent } as React.CSSProperties}
+              className={`plan-card ${recommended ? "recommended" : ""} ${selected ? "selected" : ""} ${plan.feasible ? "" : "infeasible"}`}
               key={plan.id}
-              onClick={() => onSelect(plan.id)}
+              style={{ "--plan-accent": plan.accent } as React.CSSProperties}
             >
-              <div className="plan-card-top">
-                <span className="plan-dot" />
-                <span className="plan-tag">{plan.shortName}</span>
-                {plan.id === "balanced" && (
-                  <span className="recommended-tag">
-                    <Sparkles size={12} /> Best fit
+              <div className="plan-card-head">
+                <div>
+                  <span>{planShortName(locale, plan.id)}</span>
+                  <h2>{planName(locale, plan.id)}</h2>
+                </div>
+                {recommended && (
+                  <span className="recommended-badge">
+                    <Sparkles size={13} />
+                    {t(locale, "recommended")}
                   </span>
                 )}
               </div>
-              <h2>{plan.name}</h2>
-              <p>{plan.description}</p>
-              <div className="plan-hero-metric">
-                <span>−{Math.round((plan.monthlySavingKwh / demoProfile.monthlyKwh) * 100)}%</span>
-                <small>monthly energy</small>
+              <p>{planDescription(locale, plan.id)}</p>
+              <div className="plan-status-row">
+                <span className={plan.feasible ? "good" : "bad"}>
+                  {plan.feasible
+                    ? t(locale, "feasible")
+                    : t(locale, "infeasible")}
+                </span>
+                <span className={plan.meetsTarget ? "good" : "neutral"}>
+                  {plan.meetsTarget
+                    ? t(locale, "targetMet")
+                    : t(locale, "targetMissed")}
+                </span>
               </div>
-              <div className="plan-stats">
-                <div>
-                  <span>Bill saving</span>
-                  <strong>{formatMoney(plan.monthlySavingSgd)}<small>/mo</small></strong>
-                </div>
-                <div>
-                  <span>CO₂ avoided</span>
-                  <strong>{plan.carbonSavingKg}<small> kg/mo</small></strong>
-                </div>
-                <div>
-                  <span>Comfort</span>
-                  <strong>{plan.comfortScore}<small>/100</small></strong>
-                </div>
-                <div>
-                  <span>Upfront</span>
-                  <strong>{formatMoney(plan.upfrontCostSgd)}</strong>
-                </div>
+              <div className="plan-energy">
+                <strong>−{plan.monthlySavingKwh}</strong>
+                <span>kWh / month</span>
+                <small>
+                  −{Math.round((plan.monthlySavingKwh / bill.totalKwh) * 100)}%
+                  {" "}
+                  {locale === "zh" ? "账单基线" : "of bill baseline"}
+                </small>
               </div>
-              <div className="action-list">
-                {plan.actions.map((action) => (
-                  <div key={action.title}>
-                    <CheckCircle2 size={16} />
-                    <span>
-                      <strong>{action.title}</strong>
-                      <small>{action.detail}</small>
-                    </span>
-                  </div>
-                ))}
-              </div>
-              <div className="plan-rationale">
-                <Info size={14} />
-                <span>{plan.rationale}</span>
+              <div className="plan-metrics">
+                <Metric
+                  icon={<CircleDollarSign size={17} />}
+                  label={t(locale, "billSaving")}
+                  value={`${formatMoney(plan.monthlySavingSgd)}/mo`}
+                />
+                <Metric
+                  icon={<Leaf size={17} />}
+                  label={t(locale, "avoidedCarbon")}
+                  value={`${plan.carbonSavingKg} kg/mo`}
+                />
+                <Metric
+                  icon={<Thermometer size={17} />}
+                  label={t(locale, "comfort")}
+                  value={`${plan.comfortScore}/100`}
+                />
+                <Metric
+                  icon={<CircleDollarSign size={17} />}
+                  label={t(locale, "upfront")}
+                  value={formatMoney(plan.upfrontCostSgd)}
+                />
               </div>
               <button
-                className={selected ? "primary-button" : "outline-button"}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onChoose(plan);
-                }}
-                data-testid={`choose-${plan.id}`}
+                className={selected ? "selected-button" : "plan-button"}
+                onClick={() => onSelect(plan)}
+                disabled={!plan.feasible}
               >
-                Choose {plan.name}
-                <ArrowRight size={16} />
+                {selected ? <Check size={16} /> : <ChevronRight size={16} />}
+                {selected ? t(locale, "selectedPlan") : t(locale, "selectPlan")}
               </button>
             </article>
           );
         })}
       </section>
 
-      <section className="calculation-strip">
-        <div>
-          <ShieldCheck size={20} />
-          <span>
-            <strong>Tool-verified math</strong>
-            Tariff: S$0.3478/kWh · Grid factor: 0.402 kg CO₂/kWh
-          </span>
-        </div>
-        <div>
-          <Thermometer size={20} />
-          <span>
-            <strong>Hard constraints</strong>
-            No recommendation violates 25°C sleep comfort or WFH availability
-          </span>
-        </div>
-        <div>
-          <CloudUpload size={20} />
-          <span>
-            <strong>Adaptive</strong>
-            Week-two actions change when verified performance differs from plan
-          </span>
-        </div>
-      </section>
-      </div>
-    </Localized>
-  );
-}
-
-function TrackView({
-  locale,
-  plan,
-  completedTasks,
-  progress,
-  comparisonReady,
-  comparison,
-  onToggleTask,
-  onVerify,
-}: {
-  locale: Locale;
-  plan: EnergyPlan;
-  completedTasks: number[];
-  progress: number;
-  comparisonReady: boolean;
-  comparison: ReturnType<typeof compareActualToPlan>;
-  onToggleTask: (day: number) => void;
-  onVerify: () => void;
-}) {
-  return (
-    <Localized locale={locale}>
-      <div className="view-stack">
-      <PageIntro
-        eyebrow="ACTION LOOP"
-        title="Seven small shifts."
-        accent="One measurable result."
-        description={`The ${plan.name} pathway turns recommendations into household-sized tasks, then checks the observed data before adapting.`}
-        side={
-          <div className="progress-orb">
-            <span>{progress}%</span>
-            <small>week complete</small>
-          </div>
-        }
-      />
-
-      <section className="track-grid">
-        <div className="panel task-panel">
-          <div className="panel-heading">
-            <div>
-              <span className="label">WEEK ONE</span>
-              <h2>Your action board</h2>
-            </div>
-            <span className="signal-chip">{completedTasks.length}/7 done</span>
-          </div>
-          <div className="week-progress">
-            <span style={{ width: `${progress}%` }} />
-          </div>
-          <div className="task-list">
-            {dailyTasks.map((task) => {
-              const complete = completedTasks.includes(task.day);
-              return (
-                <button
-                  className={`task-row ${complete ? "complete" : ""}`}
-                  key={task.day}
-                  onClick={() => onToggleTask(task.day)}
-                >
-                  <span className="task-check">
-                    {complete ? <Check size={15} /> : task.day}
-                  </span>
-                  <span className="task-copy">
-                    <strong>{task.title}</strong>
-                    <small>{task.detail}</small>
-                  </span>
-                  <span className="task-impact">
-                    {task.impactKwh > 0 ? `−${task.impactKwh} kWh/day` : "Setup"}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        <div className="track-side">
-          <div className="panel forecast-panel">
-            <div className="panel-heading">
-              <div>
-                <span className="label">LIVE FORECAST</span>
-                <h2>On course</h2>
-              </div>
-              <span className="forecast-icon"><Leaf size={18} /></span>
-            </div>
-            <div className="forecast-number">
-              <span>{plan.monthlySavingKwh}</span>
-              <div><strong>kWh</strong><small>planned monthly reduction</small></div>
-            </div>
-            <div className="forecast-grid">
-              <div><span>Bill</span><strong>−{formatMoney(plan.monthlySavingSgd)}</strong></div>
-              <div><span>Carbon</span><strong>−{plan.carbonSavingKg} kg</strong></div>
-              <div><span>Comfort</span><strong>{plan.comfortScore}/100</strong></div>
+      {selectedPlan && (
+        <section className="selected-plan-panel">
+          <div className="selected-plan-copy">
+          <span className="label">{t(locale, "planActions")}</span>
+            <h2>{planName(locale, selectedPlan.id)}</h2>
+            <p>{planRationale(locale, selectedPlan.id)}</p>
+            <div className="action-list">
+              {selectedPlan.actions.map((action, index) => (
+                <div className="action-row" key={action.code}>
+                  <span>{String(index + 1).padStart(2, "0")}</span>
+                  <div>
+                    <strong>{actionTitle(locale, action)}</strong>
+                    <p>{actionDetail(locale, action)}</p>
+                  </div>
+                  <b>−{action.monthlySavingKwh} kWh</b>
+                </div>
+              ))}
             </div>
           </div>
-
-          <div className="panel verify-panel">
-            <span className="label">DAY-7 CHECK-IN</span>
-            <h2>Close the loop</h2>
-            <p>
-              Import the preloaded after-data to compare forecast with observed
-              performance.
-            </p>
-            <button
-              className="primary-button full-width"
-              onClick={onVerify}
-              data-testid="verify-after-data"
-            >
-              <Upload size={17} />
-              Verify after-data
-            </button>
+          <aside className="decision-memo">
+            <span className="label">{t(locale, "finalDecision")}</span>
+            <h3>{t(locale, "rationale")}</h3>
+            <ul>
+              {result.decision.rationale.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+            <h3>{t(locale, "hardConstraints")}</h3>
+            <ul>
+              {selectedPlan.constraintNotes.map((item) => (
+                <li key={item}>{constraintNote(locale, item)}</li>
+              ))}
+            </ul>
+            <div className="assumption-note">
+              <Info size={16} />
+              <span>
+                <strong>{t(locale, "calculationBasis")}</strong>
+                {t(locale, "assumptions")}
+              </span>
+            </div>
             <small>
-              <FileSpreadsheet size={13} />
-              synthetic_week1_after.csv · clearly labelled
+              {profile.householdName} · {result.model}
             </small>
-          </div>
-        </div>
-      </section>
-
-      {comparisonReady && (
-        <section className="result-panel">
-          <div className="result-lead">
-            <span className="result-check"><Check size={25} /></span>
-            <div>
-              <span className="label">VERIFIED RESULT</span>
-              <h2>{comparison.actualSavingPercent}% less energy observed</h2>
-              <p>
-                Slightly below the 10% target, with strong comfort compliance.
-                The coach keeps the cooling routine and strengthens the plug-load
-                reminder next week.
-              </p>
-            </div>
-          </div>
-          <div className="result-metrics">
-            <div>
-              <span>Actual use</span>
-              <strong>{comparison.actualMonthlyKwh} kWh</strong>
-              <small>420 kWh baseline</small>
-            </div>
-            <div>
-              <span>Bill saved</span>
-              <strong>{formatMoney(comparison.actualSavingSgd)}</strong>
-              <small>tool calculated</small>
-            </div>
-            <div>
-              <span>CO₂ avoided</span>
-              <strong>{comparison.actualCarbonSavingKg} kg</strong>
-              <small>grid factor applied</small>
-            </div>
-            <div>
-              <span>Vs. plan</span>
-              <strong>{comparison.varianceKwh} kWh</strong>
-              <small>adjust next week</small>
-            </div>
-          </div>
-          <div className="adjustment-note">
-            <RefreshCw size={17} />
-            <span>
-              <strong>Plan adjusted:</strong> keep 25°C start temperature; add
-              an automatic 00:00 plug reminder on three nights.
-            </span>
-          </div>
+          </aside>
         </section>
       )}
-      </div>
-    </Localized>
+    </div>
   );
 }
 
-function LoadChart({
-  points,
-  compact = false,
+function DataQualityCard({
+  locale,
+  quality,
 }: {
-  points: LoadPoint[];
-  compact?: boolean;
+  locale: Locale;
+  quality: LoadDataQuality;
 }) {
   return (
-    <div className={compact ? "chart compact" : "chart"}>
+    <div
+      className={`quality-card ${quality.coveragePercent < 95 ? "warning" : ""}`}
+    >
+      <div>
+        <span className="label">{t(locale, "dataQuality")}</span>
+        <strong>{quality.coveragePercent}% {t(locale, "coverage")}</strong>
+      </div>
+      <div className="quality-metrics">
+        <span>
+          <b>{quality.dayCount}</b> {t(locale, "days")}
+        </span>
+        <span>
+          <b>{quality.recordCount}</b> {t(locale, "records")}
+        </span>
+        <span>
+          <b>{quality.missingIntervals}</b> {t(locale, "missing")}
+        </span>
+        {quality.duplicateIntervals > 0 && (
+          <span>
+            <b>{quality.duplicateIntervals}</b> {t(locale, "duplicates")}
+          </span>
+        )}
+      </div>
+      {quality.warnings.map((warning) => (
+        <small key={warning}>{warning}</small>
+      ))}
+    </div>
+  );
+}
+
+function Field({
+  label,
+  wide = false,
+  children,
+}: {
+  label: string;
+  wide?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <label className={`form-field ${wide ? "wide" : ""}`}>
+      <span>{label}</span>
+      {children}
+    </label>
+  );
+}
+
+function NumberField({
+  label,
+  value,
+  min,
+  max,
+  step,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  min?: number;
+  max?: number;
+  step?: number;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <Field label={label}>
+      <input
+        type="number"
+        value={Number.isFinite(value) ? value : ""}
+        min={min}
+        max={max}
+        step={step}
+        onChange={(event) => onChange(numericValue(event.target.value))}
+      />
+    </Field>
+  );
+}
+
+function LoadChart({ points }: { points: LoadPoint[] }) {
+  return (
+    <div className="load-chart" aria-label="Average half-hour energy chart">
       <ResponsiveContainer width="100%" height="100%">
-        <AreaChart
-          data={points}
-          margin={{ top: 10, right: 8, bottom: 0, left: compact ? -25 : -18 }}
-        >
+        <AreaChart data={points}>
           <defs>
-            <linearGradient id="energyFill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#c8f547" stopOpacity={0.58} />
-              <stop offset="100%" stopColor="#c8f547" stopOpacity={0.04} />
+            <linearGradient id="load-fill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#c8f547" stopOpacity={0.42} />
+              <stop offset="100%" stopColor="#c8f547" stopOpacity={0} />
             </linearGradient>
           </defs>
-          <CartesianGrid stroke="#deded8" strokeDasharray="3 6" vertical={false} />
+          <CartesianGrid stroke="rgba(255,255,255,0.07)" vertical={false} />
           <XAxis
             dataKey="time"
-            axisLine={false}
             tickLine={false}
-            tick={{ fill: "#777871", fontSize: 11 }}
-            interval={compact ? 11 : 7}
-          />
-          <YAxis
             axisLine={false}
-            tickLine={false}
-            tick={{ fill: "#777871", fontSize: 11 }}
-            width={38}
+            tick={{ fill: "#87908f", fontSize: 11 }}
+            interval={7}
           />
+          <YAxis hide />
           <Tooltip
-            cursor={{ stroke: "#1c211c", strokeDasharray: "3 3" }}
             contentStyle={{
-              background: "#1c211c",
-              border: "none",
-              borderRadius: "10px",
-              color: "#fff",
-              fontSize: "12px",
+              background: "#17201f",
+              border: "1px solid rgba(255,255,255,.12)",
+              borderRadius: 12,
+              color: "#f8faf7",
             }}
-            formatter={(value) => [`${Number(value).toFixed(2)} kWh`, "Usage"]}
+            formatter={(value) => [`${Number(value).toFixed(3)} kWh`, "Average"]}
           />
           <Area
             type="monotone"
             dataKey="kwh"
-            stroke="#1c211c"
-            strokeWidth={2}
-            fill="url(#energyFill)"
-            animationDuration={700}
+            stroke="#c8f547"
+            strokeWidth={2.3}
+            fill="url(#load-fill)"
+            dot={false}
           />
         </AreaChart>
       </ResponsiveContainer>
     </div>
+  );
+}
+
+function InsightCard({
+  insight,
+  locale,
+}: {
+  insight: EnergyInsight;
+  locale: Locale;
+}) {
+  return (
+    <article className={`insight-card ${insight.severity}`}>
+      <div>
+        <span className="severity-dot" />
+        <small>{evidenceLabel(locale, insight.evidenceKind)}</small>
+      </div>
+      <h3>{insightTitle(locale, insight)}</h3>
+      <p>{insightDetail(locale, insight)}</p>
+      <blockquote>{insightEvidence(locale, insight)}</blockquote>
+      <strong>
+        {insight.confidence}% {locale === "zh" ? "置信度" : "confidence"}
+      </strong>
+    </article>
+  );
+}
+
+function DecisionList({
+  icon,
+  title,
+  items,
+}: {
+  icon: ReactNode;
+  title: string;
+  items: string[];
+}) {
+  return (
+    <article className="decision-list">
+      <div>
+        {icon}
+        <strong>{title}</strong>
+      </div>
+      <ul>
+        {items.map((item) => (
+          <li key={item}>{item}</li>
+        ))}
+      </ul>
+    </article>
   );
 }
 
@@ -1104,7 +1668,7 @@ function PageIntro({
   title: string;
   accent: string;
   description: string;
-  side: React.ReactNode;
+  side?: ReactNode;
 }) {
   return (
     <section className="page-intro">
@@ -1120,61 +1684,241 @@ function PageIntro({
   );
 }
 
+function Metric({
+  icon,
+  label,
+  value,
+}: {
+  icon: ReactNode;
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="metric-row">
+      <span>{icon}</span>
+      <div>
+        <small>{label}</small>
+        <strong>{value}</strong>
+      </div>
+    </div>
+  );
+}
+
 function InfoTooltip({ text }: { text: string }) {
   return (
-    <span className="info-tooltip" data-tooltip={text} tabIndex={0}>
-      <Info size={15} />
+    <span className="info-tooltip" tabIndex={0}>
+      <Info size={16} />
+      <span>{text}</span>
     </span>
   );
 }
 
-function Localized({
-  locale,
-  children,
-}: {
-  locale: Locale;
-  children: ReactNode;
-}) {
-  return <>{localizeNode(children, locale)}</>;
+function evidenceLabel(
+  locale: Locale,
+  evidence?: "measured" | "estimated" | "tool-calculated",
+) {
+  if (evidence === "measured") return t(locale, "measured");
+  if (evidence === "tool-calculated") return t(locale, "toolCalculated");
+  return t(locale, "estimated");
 }
 
-function localizeNode(node: ReactNode, locale: Locale): ReactNode {
-  if (typeof node === "string") return translate(locale, node);
-  if (node === null || node === undefined || typeof node === "boolean") {
-    return node;
+function applianceName(
+  locale: Locale,
+  key: AgentSuccessResponse["applianceEstimates"][number]["key"],
+) {
+  if (locale === "en") {
+    return {
+      "air-conditioning": "Air conditioning",
+      refrigeration: "Refrigeration",
+      "water-heating": "Water heating",
+      laundry: "Laundry",
+      other: "Other / unattributed",
+    }[key];
   }
-  if (Array.isArray(node)) {
-    return node.map((child) => localizeNode(child, locale));
-  }
-  if (!isValidElement(node)) return node;
+  return {
+    "air-conditioning": "空调",
+    refrigeration: "冰箱",
+    "water-heating": "热水器",
+    laundry: "洗衣",
+    other: "其他 / 未归因",
+  }[key];
+}
 
-  const props = node.props as Record<string, unknown>;
-  const translatedProps: Record<string, unknown> = {};
-  const stringProps = [
-    "aria-label",
-    "title",
-    "description",
-    "accent",
-    "eyebrow",
-    "text",
-    "data-tooltip",
-  ];
+function planName(locale: Locale, id: EnergyPlan["id"]) {
+  const labels = {
+    en: { money: "Maximum Savings", balanced: "Balanced", carbon: "Low Carbon" },
+    zh: { money: "最大节省", balanced: "均衡方案", carbon: "低碳方案" },
+  };
+  return labels[locale][id];
+}
 
-  for (const key of stringProps) {
-    if (typeof props[key] === "string") {
-      translatedProps[key] = translate(locale, props[key]);
-    }
-  }
+function planShortName(locale: Locale, id: EnergyPlan["id"]) {
+  const labels = {
+    en: { money: "Save most", balanced: "Comfort first", carbon: "Cut carbon" },
+    zh: { money: "节省最多", balanced: "舒适优先", carbon: "减少碳排" },
+  };
+  return labels[locale][id];
+}
 
-  if (props.side !== undefined) {
-    translatedProps.side = localizeNode(props.side as ReactNode, locale);
+function planDescription(locale: Locale, id: EnergyPlan["id"]) {
+  if (locale === "en") {
+    return {
+      money: "Uses the full declared comfort range and strongest no-purchase routine.",
+      balanced: "Targets measured opportunities while protecting sleep and work routines.",
+      carbon: "Adds an appliance upgrade and maintenance to the balanced routine.",
+    }[id];
   }
-  if (props.children !== undefined) {
-    translatedProps.children = Children.map(
-      props.children as ReactNode,
-      (child) => localizeNode(child, locale),
+  return {
+    money: "在舒适温度上限内采用最积极的零购置行动。",
+    balanced: "优先保护睡眠和工作习惯，再利用实测节能机会。",
+    carbon: "在均衡行动基础上加入设备升级和维护。",
+  }[id];
+}
+
+function actionTitle(locale: Locale, action: PlanAction) {
+  if (locale === "en") return action.title;
+  return {
+    "ac-maximum": "充分利用可接受的空调温度范围",
+    "ac-balanced": "使用空调智能睡眠模式",
+    "baseload-maximum": "削减大部分可避免的夜间基荷",
+    "baseload-balanced": "建立选择性夜间断电流程",
+    "laundry-maximum": "持续使用冷水洗涤",
+    "laundry-balanced": "将部分洗涤改为冷水模式",
+    "balanced-routine": "采用均衡行动组合",
+    "refrigerator-upgrade": "规划高效冰箱替换",
+    "cooling-maintenance": "优化空调维护",
+  }[action.code];
+}
+
+function actionDetail(locale: Locale, action: PlanAction) {
+  if (locale === "en") return action.detail;
+  return {
+    "ac-maximum": "提高夜间设定温度，但绝不超过用户填写的舒适温度上限。",
+    "ac-balanced": "入睡90分钟后小幅提高设定温度。",
+    "baseload-maximum": "关闭可停用插座组，同时保留居家办公设备。",
+    "baseload-balanced": "只实现一半实测基荷潜力，降低执行负担。",
+    "laundry-maximum": "以冷水洗涤产生节能，不把单纯错峰计为节能量。",
+    "laundry-balanced": "在可重复的每周洗涤中使用冷水设置。",
+    "balanced-routine": "保持舒适优先的空调、基荷和洗衣组合。",
+    "refrigerator-upgrade": "按申报冰箱耗电量保守计算25%的替换潜力。",
+    "cooling-maintenance": "清洁滤网并改善密封，按空调耗电量的3%计算。",
+  }[action.code];
+}
+
+function insightTitle(locale: Locale, insight: EnergyInsight) {
+  if (locale === "en") return insight.title;
+  return {
+    peak: "日常用电集中在实测峰值时段",
+    baseload: "夜间基荷存在可量化的削减范围",
+    "top-appliance": "申报设备中存在主要耗电来源",
+  }[insight.id];
+}
+
+function insightDetail(locale: Locale, insight: EnergyInsight) {
+  if (locale === "en") return insight.detail;
+  return {
+    peak: "多日平均曲线用于识别最稳定、可重复的高负荷时段。",
+    baseload: "使用家庭自身较低的夜间观测值建立目标，不采用通用家庭基准。",
+    "top-appliance": "估算使用用户申报的设备和使用时间，并与账单总量进行校准。",
+  }[insight.id];
+}
+
+function insightEvidence(locale: Locale, insight: EnergyInsight) {
+  if (locale === "en") return insight.evidence;
+  if (insight.id === "peak") {
+    const match = insight.evidence.match(
+      /^([\d.]+)%.*?average peak is ([\d:]+)\.$/,
     );
+    return match
+      ? `实测用电中有 ${match[1]}% 发生在18:00以后；平均峰值时段为 ${match[2]}。`
+      : insight.evidence;
   }
+  if (insight.id === "baseload") {
+    const values = insight.evidence.match(/[\d.]+/g);
+    return values?.length
+      ? `夜间平均每半小时 ${values[0]} kWh，夜间第20百分位为 ${values[1]} kWh。`
+      : insight.evidence;
+  }
+  const values = insight.evidence.match(/[\d.]+/g);
+  return values?.length
+    ? `估算月耗电 ${values[0]} kWh，占账单基线的 ${values[1]}%。`
+    : insight.evidence;
+}
 
-  return cloneElement(node, translatedProps);
+function applianceBasis(
+  locale: Locale,
+  key: AgentSuccessResponse["applianceEstimates"][number]["key"],
+  normalized: boolean,
+) {
+  if (locale === "en") {
+    const text = {
+      "air-conditioning":
+        "Quantity × rated power × daily hours × 30 × 0.65 duty factor",
+      refrigeration: "Declared annual energy ÷ 12",
+      "water-heating": "Rated power × daily minutes × 30",
+      laundry: "Energy per cycle × weekly cycles × 52 ÷ 12",
+      other: "Declared other use plus any unallocated bill energy",
+    }[key];
+    return normalized ? `${text}; normalized to the bill total` : text;
+  }
+  const text = {
+    "air-conditioning": "数量 × 额定功率 × 每日时长 × 30 × 0.65负载系数",
+    refrigeration: "申报年耗电量 ÷ 12",
+    "water-heating": "额定功率 × 每日分钟数 × 30",
+    laundry: "单次耗电 × 每周次数 × 52 ÷ 12",
+    other: "申报的其他耗电加上未归因账单用电",
+  }[key];
+  return normalized ? `${text}；已按账单总量归一化` : text;
+}
+
+function planRationale(locale: Locale, id: EnergyPlan["id"]) {
+  if (locale === "en") {
+    return {
+      money:
+        "Largest no-purchase reduction that stays within the household's declared comfort limit.",
+      balanced:
+        "Low-effort measures tied directly to the household's load shape and declared schedule.",
+      carbon:
+        "Greatest modeled energy and carbon reduction, subject to the declared replacement budget.",
+    }[id];
+  }
+  return {
+    money: "在家庭申报的舒适温度范围内，实现最大的零购置节能。",
+    balanced: "低执行难度，且每项行动都对应实测负荷或申报时间表。",
+    carbon: "在替换预算允许时，实现模型估算中最大的能源和碳减排。",
+  }[id];
+}
+
+function constraintNote(locale: Locale, note: string) {
+  if (locale === "en") return note;
+  const budget = note.match(/S\$([\d.]+)/);
+  if (note.startsWith("Upfront cost is within")) {
+    return `前期投入不超过 S$${budget?.[1] ?? "—"} 预算。`;
+  }
+  if (note.startsWith("Upfront cost exceeds")) {
+    return `前期投入超过 S$${budget?.[1] ?? "—"} 预算。`;
+  }
+  const temperature = note.match(/([\d.]+)°C/);
+  if (temperature) {
+    return `所有空调行动均不超过 ${temperature[1]}°C。`;
+  }
+  if (note.startsWith("Work-from-home")) {
+    return "居家办公设备保持可用。";
+  }
+  return "未申报居家办公可用性约束。";
+}
+
+function liveAgentError(
+  locale: Locale,
+  code: AgentErrorResponse["code"],
+  fallback: string,
+) {
+  if (locale !== "zh") return fallback;
+  if (code === "configuration_missing") {
+    return "未配置 OPENAI_API_KEY，实时多Agent演示无法运行。配置后请重新诊断。";
+  }
+  if (code === "invalid_input") {
+    return "提交的数据未通过校验，请返回基线页检查输入后重试。";
+  }
+  return "实时多Agent调用失败，请检查模型配置或网络后重新运行。";
 }
