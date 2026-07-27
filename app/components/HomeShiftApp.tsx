@@ -16,6 +16,7 @@ import {
   Home,
   Info,
   Leaf,
+  Languages,
   LoaderCircle,
   LockKeyhole,
   MoonStar,
@@ -36,7 +37,15 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { useMemo, useState } from "react";
+import {
+  Children,
+  cloneElement,
+  isValidElement,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   buildInsights,
   calculateCarbon,
@@ -49,6 +58,7 @@ import {
   parseIntervalCsv,
 } from "@/lib/energy";
 import { agentTrace, dailyTasks, demoProfile } from "@/lib/demo-data";
+import { translate, type Locale } from "@/lib/i18n";
 import type {
   AppStage,
   EnergyPlan,
@@ -99,6 +109,7 @@ function formatMoney(value: number) {
 }
 
 export default function HomeShiftApp() {
+  const [locale, setLocale] = useState<Locale>("en");
   const [stage, setStage] = useState<AppStage>("baseline");
   const [loadPoints, setLoadPoints] = useState<LoadPoint[]>(generateDemoLoad);
   const [files, setFiles] = useState<Record<SourceKind, string>>({
@@ -130,6 +141,19 @@ export default function HomeShiftApp() {
   const baselineCost = calculateCost(demoProfile.monthlyKwh);
   const baselineCarbon = calculateCarbon(demoProfile.monthlyKwh);
   const progress = Math.round((completedTasks.length / dailyTasks.length) * 100);
+
+  useEffect(() => {
+    const saved = window.localStorage.getItem("homeshift-locale");
+    const restore = window.setTimeout(() => {
+      if (saved === "en" || saved === "zh") setLocale(saved);
+    }, 0);
+    return () => window.clearTimeout(restore);
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.lang = locale === "zh" ? "zh-CN" : "en";
+    window.localStorage.setItem("homeshift-locale", locale);
+  }, [locale]);
 
   async function handleFile(kind: SourceKind, file?: File) {
     if (!file) return;
@@ -243,12 +267,13 @@ export default function HomeShiftApp() {
   }
 
   function showToast(message: string) {
-    setToast(message);
+    setToast(translate(locale, message));
     window.setTimeout(() => setToast(""), 2600);
   }
 
   return (
-    <main className="app-shell">
+    <Localized locale={locale}>
+      <main className="app-shell">
       <header className="topbar">
         <button
           className="brand"
@@ -279,6 +304,15 @@ export default function HomeShiftApp() {
             <Sparkles size={13} />
             Synthetic demo
           </span>
+          <button
+            className="language-button"
+            onClick={() => setLocale((current) => current === "en" ? "zh" : "en")}
+            aria-label={locale === "en" ? "切换到中文" : "Switch to English"}
+            data-testid="language-toggle"
+          >
+            <Languages size={15} />
+            <span>{locale === "en" ? "中文" : "EN"}</span>
+          </button>
           <button className="icon-button" onClick={loadSyntheticDemo} title="Reset demo">
             <RefreshCw size={17} />
           </button>
@@ -288,6 +322,7 @@ export default function HomeShiftApp() {
       <section className="content-wrap">
         {stage === "baseline" && (
           <BaselineView
+            locale={locale}
             loadPoints={loadPoints}
             files={files}
             patterns={patterns}
@@ -302,6 +337,7 @@ export default function HomeShiftApp() {
 
         {stage === "diagnosis" && (
           <DiagnosisView
+            locale={locale}
             loadPoints={loadPoints}
             insights={insights}
             appliances={appliances}
@@ -314,6 +350,7 @@ export default function HomeShiftApp() {
 
         {stage === "plans" && (
           <PlansView
+            locale={locale}
             plans={plans}
             selectedPlanId={selectedPlanId}
             onSelect={setSelectedPlanId}
@@ -323,6 +360,7 @@ export default function HomeShiftApp() {
 
         {stage === "track" && (
           <TrackView
+            locale={locale}
             plan={selectedPlan}
             completedTasks={completedTasks}
             progress={progress}
@@ -348,11 +386,13 @@ export default function HomeShiftApp() {
           {toast}
         </div>
       )}
-    </main>
+      </main>
+    </Localized>
   );
 }
 
 function BaselineView({
+  locale,
   loadPoints,
   files,
   patterns,
@@ -363,6 +403,7 @@ function BaselineView({
   onAnalyze,
   isAnalyzing,
 }: {
+  locale: Locale;
   loadPoints: LoadPoint[];
   files: Record<SourceKind, string>;
   patterns: ReturnType<typeof detectLoadPatterns>;
@@ -374,7 +415,8 @@ function BaselineView({
   isAnalyzing: boolean;
 }) {
   return (
-    <div className="view-stack">
+    <Localized locale={locale}>
+      <div className="view-stack">
       <div className="eyebrow-row">
         <span className="eyebrow">HOUSEHOLD ENERGY COPILOT</span>
         <span className="live-dot">
@@ -537,11 +579,13 @@ function BaselineView({
           </div>
         </div>
       </section>
-    </div>
+      </div>
+    </Localized>
   );
 }
 
 function DiagnosisView({
+  locale,
   loadPoints,
   insights,
   appliances,
@@ -550,6 +594,7 @@ function DiagnosisView({
   agentMode,
   onContinue,
 }: {
+  locale: Locale;
   loadPoints: LoadPoint[];
   insights: ReturnType<typeof buildInsights>;
   appliances: ReturnType<typeof estimateAppliances>;
@@ -559,7 +604,8 @@ function DiagnosisView({
   onContinue: () => void;
 }) {
   return (
-    <div className="view-stack">
+    <Localized locale={locale}>
+      <div className="view-stack">
       <PageIntro
         eyebrow="DIAGNOSIS"
         title="The bill is high for"
@@ -687,23 +733,27 @@ function DiagnosisView({
           <ArrowRight size={17} />
         </button>
       </div>
-    </div>
+      </div>
+    </Localized>
   );
 }
 
 function PlansView({
+  locale,
   plans,
   selectedPlanId,
   onSelect,
   onChoose,
 }: {
+  locale: Locale;
   plans: EnergyPlan[];
   selectedPlanId: EnergyPlan["id"];
   onSelect: (id: EnergyPlan["id"]) => void;
   onChoose: (plan: EnergyPlan) => void;
 }) {
   return (
-    <div className="view-stack">
+    <Localized locale={locale}>
+      <div className="view-stack">
       <PageIntro
         eyebrow="NEGOTIATED OPTIONS"
         title="Choose the trade-off,"
@@ -814,11 +864,13 @@ function PlansView({
           </span>
         </div>
       </section>
-    </div>
+      </div>
+    </Localized>
   );
 }
 
 function TrackView({
+  locale,
   plan,
   completedTasks,
   progress,
@@ -827,6 +879,7 @@ function TrackView({
   onToggleTask,
   onVerify,
 }: {
+  locale: Locale;
   plan: EnergyPlan;
   completedTasks: number[];
   progress: number;
@@ -836,7 +889,8 @@ function TrackView({
   onVerify: () => void;
 }) {
   return (
-    <div className="view-stack">
+    <Localized locale={locale}>
+      <div className="view-stack">
       <PageIntro
         eyebrow="ACTION LOOP"
         title="Seven small shifts."
@@ -975,7 +1029,8 @@ function TrackView({
           </div>
         </section>
       )}
-    </div>
+      </div>
+    </Localized>
   );
 }
 
@@ -1071,4 +1126,55 @@ function InfoTooltip({ text }: { text: string }) {
       <Info size={15} />
     </span>
   );
+}
+
+function Localized({
+  locale,
+  children,
+}: {
+  locale: Locale;
+  children: ReactNode;
+}) {
+  return <>{localizeNode(children, locale)}</>;
+}
+
+function localizeNode(node: ReactNode, locale: Locale): ReactNode {
+  if (typeof node === "string") return translate(locale, node);
+  if (node === null || node === undefined || typeof node === "boolean") {
+    return node;
+  }
+  if (Array.isArray(node)) {
+    return node.map((child) => localizeNode(child, locale));
+  }
+  if (!isValidElement(node)) return node;
+
+  const props = node.props as Record<string, unknown>;
+  const translatedProps: Record<string, unknown> = {};
+  const stringProps = [
+    "aria-label",
+    "title",
+    "description",
+    "accent",
+    "eyebrow",
+    "text",
+    "data-tooltip",
+  ];
+
+  for (const key of stringProps) {
+    if (typeof props[key] === "string") {
+      translatedProps[key] = translate(locale, props[key]);
+    }
+  }
+
+  if (props.side !== undefined) {
+    translatedProps.side = localizeNode(props.side as ReactNode, locale);
+  }
+  if (props.children !== undefined) {
+    translatedProps.children = Children.map(
+      props.children as ReactNode,
+      (child) => localizeNode(child, locale),
+    );
+  }
+
+  return cloneElement(node, translatedProps);
 }

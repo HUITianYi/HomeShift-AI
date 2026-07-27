@@ -7,6 +7,10 @@ Sustainability**. It turns household bills, half-hour usage data and appliance
 labels into three explainable energy plans, a seven-day action board and a
 verified before/after report.
 
+The public demo supports instant English/Chinese switching, remembers the
+device preference and provides a touch-friendly single-column mobile flow so a
+class can try the prototype from individual phones.
+
 ## Demo flow
 
 1. Review or replace the clearly labelled synthetic bill, CSV and appliance
