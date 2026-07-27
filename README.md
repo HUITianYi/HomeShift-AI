@@ -1,5 +1,7 @@
 # HomeShift AI
 
+<img width="1731" height="909" alt="serface1" src="https://github.com/user-attachments/assets/9bd87225-ed58-4480-b566-1a4a9888eb9b" />
+
 > **降低账单，不牺牲舒适。**
 > 一个使用真实家庭数据、确定性能源计算和实时多 Agent 协作生成节能方案的双语演示系统。
 
