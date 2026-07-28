@@ -62,4 +62,17 @@ describe("HomeShift SPA", () => {
     expect(screen.getByText("UCI France")).toBeInTheDocument();
     expect(screen.getByText("导入与列映射")).toBeInTheDocument();
   });
+
+  it("explains that baseline charts are computed from the current workspace", async () => {
+    renderApp("/baseline");
+    expect(await screen.findByText("当前基线由 Python 现场计算")).toBeInTheDocument();
+    expect(screen.getByText(/不是预置截图/)).toBeInTheDocument();
+  });
+
+  it("blocks direct plan navigation until agent diagnosis is completed", async () => {
+    renderApp("/plan");
+    expect((await screen.findAllByText("计划阶段尚未解锁。")).length).toBeGreaterThan(0);
+    expect(screen.getByRole("link", { name: /前往诊断/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "计划 locked" })).toBeInTheDocument();
+  });
 });

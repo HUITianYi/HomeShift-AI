@@ -120,7 +120,21 @@ export const workspaceFixture = {
     trace: [],
   },
   memory: { count: 0, items: [] },
-  runtime: { model: statusFixture.model, tracking: {} },
+  runtime: {
+    model: statusFixture.model,
+    tracking: {},
+    workflow: {
+      data_ready: true,
+      diagnosis_completed: false,
+      diagnosis_completed_at: null,
+      plan_proposed: false,
+      plan_committed: false,
+      tracking_ready: false,
+      review_completed: false,
+      review_completed_at: null,
+      last_operation: null,
+    },
+  },
   disclaimers: {},
 };
 

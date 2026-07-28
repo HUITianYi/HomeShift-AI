@@ -129,6 +129,18 @@ export const workspaceSchema = z.object({
   runtime: z.object({
     model: z.any(),
     tracking: z.any(),
+    workflow: z.object({
+      data_ready: z.boolean(),
+      diagnosis_completed: z.boolean(),
+      diagnosis_completed_at: z.string().nullable().optional(),
+      plan_proposed: z.boolean(),
+      plan_committed: z.boolean(),
+      tracking_ready: z.boolean(),
+      review_completed: z.boolean(),
+      review_completed_at: z.string().nullable().optional(),
+      last_operation: z.string().nullable().optional(),
+      last_run: z.any().optional(),
+    }).optional(),
   }).optional(),
   disclaimers: z.any(),
 }).passthrough();
@@ -191,6 +203,7 @@ export const datasetsSchema = z.object({
 export type Datasets = z.infer<typeof datasetsSchema>;
 
 const runSchema = z.object({
+  operation: z.string(),
   mode: z.enum(["live", "mock"]),
   provider: z.string(),
   model: z.string(),

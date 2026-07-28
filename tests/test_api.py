@@ -33,6 +33,11 @@ class ApiTestCase(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200, response.text)
 
+    def complete_diagnosis(self):
+        response = self.client.post("/api/v1/diagnose", json={"locale": "zh"})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["run"]["operation"], "diagnose")
+
     def test_status_workspace_and_cors(self):
         root = self.client.get("/", follow_redirects=False)
         self.assertEqual(root.status_code, 307)
@@ -45,6 +50,7 @@ class ApiTestCase(unittest.TestCase):
         workspace = self.client.get("/api/v1/workspace").json()
         self.assertEqual(workspace["agents"]["count"], 7)
         self.assertIn("runtime", workspace)
+        self.assertFalse(workspace["runtime"]["workflow"]["diagnosis_completed"])
         preflight = self.client.options(
             "/api/v1/status",
             headers={
@@ -61,6 +67,7 @@ class ApiTestCase(unittest.TestCase):
 
     def test_proposal_does_not_persist_until_commit(self):
         self.select_mock()
+        self.complete_diagnosis()
         proposal = self.client.post("/api/v1/plan/propose", json={"locale": "zh"})
         self.assertEqual(proposal.status_code, 200, proposal.text)
         payload = proposal.json()
@@ -87,6 +94,7 @@ class ApiTestCase(unittest.TestCase):
 
     def test_tracking_simulation_is_visibly_marked(self):
         self.select_mock()
+        self.complete_diagnosis()
         proposal = self.client.post("/api/v1/plan/propose", json={"locale": "zh"}).json()
         action_ids = [item["id"] for item in proposal["run"]["proposal"]["actions"]]
         self.client.post(
@@ -103,6 +111,7 @@ class ApiTestCase(unittest.TestCase):
 
     def test_real_tracking_upload_appends_after_current_data(self):
         self.select_mock()
+        self.complete_diagnosis()
         proposal = self.client.post("/api/v1/plan/propose", json={"locale": "zh"}).json()
         action_ids = [item["id"] for item in proposal["run"]["proposal"]["actions"]]
         self.client.post(
@@ -126,6 +135,7 @@ class ApiTestCase(unittest.TestCase):
 
     def test_new_import_resets_plan_memory_and_trace(self):
         self.select_mock()
+        self.complete_diagnosis()
         proposal = self.client.post("/api/v1/plan/propose", json={"locale": "zh"}).json()
         action_ids = [item["id"] for item in proposal["run"]["proposal"]["actions"]]
         self.client.post(
@@ -151,6 +161,45 @@ class ApiTestCase(unittest.TestCase):
         fresh = AppContext(root=self.root)
         self.assertIsNone(fresh.store.get_active_plan())
         self.assertFalse((fresh.data_dir / "last_trace.json").exists())
+        self.assertFalse((fresh.data_dir / "workflow_state.json").exists())
+
+    def test_workflow_blocks_plan_and_review_jump_steps(self):
+        self.select_mock()
+        blocked_plan = self.client.post("/api/v1/plan/propose", json={"locale": "zh"})
+        self.assertEqual(blocked_plan.status_code, 409)
+        self.assertEqual(
+            blocked_plan.json()["error"]["code"],
+            "workflow_prerequisite_missing",
+        )
+
+        self.complete_diagnosis()
+        workflow = self.client.get("/api/v1/workspace").json()["runtime"]["workflow"]
+        self.assertTrue(workflow["diagnosis_completed"])
+        self.assertEqual(workflow["last_operation"], "diagnosis")
+
+        blocked_commit = self.client.post(
+            "/api/v1/plan/commit",
+            json={
+                "action_ids": ["standby_cut"],
+                "rationale": "skip proposal",
+                "confirmed_by_user": True,
+            },
+        )
+        self.assertEqual(blocked_commit.status_code, 409)
+        self.assertEqual(
+            blocked_commit.json()["error"]["code"],
+            "workflow_prerequisite_missing",
+        )
+
+        proposal = self.client.post("/api/v1/plan/propose", json={"locale": "zh"}).json()
+        action_ids = [item["id"] for item in proposal["run"]["proposal"]["actions"]]
+        self.client.post(
+            "/api/v1/plan/commit",
+            json={"action_ids": action_ids, "rationale": "test", "confirmed_by_user": True},
+        )
+        blocked_review = self.client.post("/api/v1/review", json={"locale": "zh"})
+        self.assertEqual(blocked_review.status_code, 409)
+        self.assertEqual(blocked_review.json()["error"]["code"], "tracking_missing")
 
 
 class PromptLocalizationTest(unittest.TestCase):

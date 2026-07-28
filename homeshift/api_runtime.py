@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -110,6 +111,43 @@ def save_trace(ctx: AppContext, operation: str, trace: list[dict]) -> None:
     )
 
 
+def get_workflow_state(ctx: AppContext) -> dict:
+    path = ctx.data_dir / "workflow_state.json"
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def mark_workflow_step(ctx: AppContext, step: str, run: dict | None = None) -> dict:
+    """记录 Web 向导已经真实完成的操作；新数据导入时会随派生状态一起清空。"""
+    ctx.data_dir.mkdir(parents=True, exist_ok=True)
+    state = get_workflow_state(ctx)
+    state[f"{step}_completed_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    state["last_operation"] = step
+    if run:
+        state["last_run"] = {
+            "operation": run.get("operation", step),
+            "mode": run.get("mode"),
+            "provider": run.get("provider"),
+            "model": run.get("model"),
+        }
+    (ctx.data_dir / "workflow_state.json").write_text(
+        json.dumps(state, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return state
+
+
+def require_workflow_step(ctx: AppContext, step: str, message: str) -> None:
+    state = get_workflow_state(ctx)
+    if not state.get(f"{step}_completed_at"):
+        raise ApiProblem("workflow_prerequisite_missing", message, 409)
+
+
 def run_agent(
     ctx: AppContext,
     prompt: str,
@@ -144,6 +182,7 @@ def run_agent(
                 entry["tool"] = "propose_plan"
     save_trace(ctx, operation, trace)
     result = {
+        "operation": operation,
         "mode": "mock" if settings["kind"] == "mock" else "live",
         "provider": settings["provider"],
         "model": settings.get("model") or "mock-playbook",
@@ -169,6 +208,11 @@ def workspace_payload(ctx: AppContext, trace: list[dict] | None = None) -> dict:
     tracking_meta = {}
     if tracking_path.exists():
         tracking_meta = json.loads(tracking_path.read_text(encoding="utf-8"))
+    state = get_workflow_state(ctx)
+    active_plan = ctx.store.get_active_plan()
+    data_ready = bool(payload.get("baseline", {}).get("available"))
+    diagnosis_completed = bool(state.get("diagnosis_completed_at")) or bool(active_plan)
+    tracking_ready = bool(tracking_meta) and bool(payload.get("track", {}).get("available"))
     payload["memory"] = {
         "items": ctx.store.get_memories(),
         "count": len(ctx.store.get_memories()),
@@ -176,6 +220,18 @@ def workspace_payload(ctx: AppContext, trace: list[dict] | None = None) -> dict:
     payload["runtime"] = {
         "model": public_settings(ctx),
         "tracking": tracking_meta,
+        "workflow": {
+            "data_ready": data_ready,
+            "diagnosis_completed": diagnosis_completed,
+            "diagnosis_completed_at": state.get("diagnosis_completed_at"),
+            "plan_proposed": bool(state.get("plan_proposal_completed_at")),
+            "plan_committed": bool(active_plan),
+            "tracking_ready": tracking_ready,
+            "review_completed": bool(state.get("review_completed_at")),
+            "review_completed_at": state.get("review_completed_at"),
+            "last_operation": state.get("last_operation"),
+            "last_run": state.get("last_run"),
+        },
     }
     return payload
 
@@ -187,6 +243,7 @@ def reset_derived_state(ctx: AppContext) -> None:
         "memory.json",
         "reviews.json",
         "last_trace.json",
+        "workflow_state.json",
         "tracking_meta.json",
         "report.html",
     ):

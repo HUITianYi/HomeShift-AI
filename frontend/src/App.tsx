@@ -2,6 +2,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type CSSProperties,
   type FormEvent,
   type ReactNode,
 } from "react";
@@ -79,7 +80,44 @@ const stages = [
   { id: "track", path: "/track", icon: RefreshCw },
 ] as const;
 
+type StageId = (typeof stages)[number]["id"];
+type OperationKind =
+  | "import"
+  | "profile"
+  | "diagnosis"
+  | "proposal"
+  | "commit"
+  | "tracking"
+  | "review";
+type OperationController = {
+  start: (kind: OperationKind) => void;
+  finish: () => void;
+};
+
+function workflowOf(workspace: Workspace) {
+  const workflow = workspace.runtime?.workflow;
+  return {
+    dataReady: workflow?.data_ready ?? workspace.baseline.available,
+    diagnosisCompleted: workflow?.diagnosis_completed ?? false,
+    planProposed: workflow?.plan_proposed ?? false,
+    planCommitted: workflow?.plan_committed ?? Boolean(workspace.plans.has_committed_plan),
+    trackingReady: workflow?.tracking_ready ?? workspace.track.available,
+    reviewCompleted: workflow?.review_completed ?? false,
+    lastOperation: workflow?.last_operation ?? null,
+  };
+}
+
+function stageAccess(stage: StageId, workspace: Workspace) {
+  const workflow = workflowOf(workspace);
+  if (stage === "data") return { unlocked: true, completed: workflow.dataReady, requiredPath: "/data" };
+  if (stage === "baseline") return { unlocked: workflow.dataReady, completed: workflow.dataReady, requiredPath: "/data" };
+  if (stage === "diagnosis") return { unlocked: workflow.dataReady, completed: workflow.diagnosisCompleted, requiredPath: "/data" };
+  if (stage === "plan") return { unlocked: workflow.diagnosisCompleted, completed: workflow.planCommitted, requiredPath: "/diagnosis" };
+  return { unlocked: workflow.planCommitted, completed: workflow.trackingReady, requiredPath: "/plan" };
+}
+
 function App() {
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [locale, setLocale] = useState<Locale>(
     () => (localStorage.getItem("homeshift-locale") as Locale) || "zh",
@@ -90,6 +128,8 @@ function App() {
   const [latestRun, setLatestRun] = useState<AgentRun | null>(null);
   const [proposalIds, setProposalIds] = useState<string[]>([]);
   const [navOpen, setNavOpen] = useState(false);
+  const [activeOperation, setActiveOperation] = useState<{ kind: OperationKind; startedAt: number } | null>(null);
+  const [guideNotice, setGuideNotice] = useState<string | null>(null);
   const copy = useCopy(locale);
 
   useEffect(() => {
@@ -97,13 +137,25 @@ function App() {
     document.documentElement.lang = locale === "zh" ? "zh-CN" : "en";
   }, [locale]);
 
+  useEffect(() => {
+    if (!guideNotice) return;
+    const timer = window.setTimeout(() => setGuideNotice(null), 6000);
+    return () => window.clearTimeout(timer);
+  }, [guideNotice]);
+
   const statusQuery = useQuery({ queryKey: ["status"], queryFn: api.status });
   const providersQuery = useQuery({ queryKey: ["providers"], queryFn: api.providers });
   const datasetsQuery = useQuery({ queryKey: ["datasets"], queryFn: api.datasets });
   const workspaceQuery = useQuery({ queryKey: ["workspace"], queryFn: api.workspace });
 
   const refresh = (workspace?: Workspace) => {
-    if (workspace) queryClient.setQueryData(["workspace"], workspace);
+    if (workspace) {
+      queryClient.setQueryData(["workspace"], workspace);
+      if (!workflowOf(workspace).diagnosisCompleted) {
+        setLatestRun(null);
+        setProposalIds([]);
+      }
+    }
     void queryClient.invalidateQueries({ queryKey: ["status"] });
     void queryClient.invalidateQueries({ queryKey: ["workspace"] });
   };
@@ -143,6 +195,26 @@ function App() {
 
   const status = statusQuery.data!;
   const workspace = workspaceQuery.data!;
+  const workflow = workflowOf(workspace);
+  const operation: OperationController = {
+    start: (kind) => setActiveOperation({ kind, startedAt: Date.now() }),
+    finish: () => setActiveOperation(null),
+  };
+
+  const explainLockedStage = (stage: StageId) => {
+    const message = stage === "plan"
+      ? locale === "zh"
+        ? "计划阶段尚未解锁：请先在诊断页完成一次 Agent 分析。"
+        : "Plan is locked. Complete an agent diagnosis first."
+      : stage === "track"
+        ? locale === "zh"
+          ? "追踪阶段尚未解锁：请先让 Agent 提案并由你确认正式计划。"
+          : "Tracking is locked. Commit an agent-assisted plan first."
+        : locale === "zh"
+          ? "请先导入或建立一份家庭用电数据。"
+          : "Import or create a household dataset first.";
+    setGuideNotice(message);
+  };
 
   return (
     <div className="app-shell">
@@ -161,17 +233,38 @@ function App() {
         <nav>
           {stages.map((stage, index) => {
             const Icon = stage.icon;
+            const access = stageAccess(stage.id, workspace);
+            if (!access.unlocked) {
+              return (
+                <button
+                  key={stage.id}
+                  type="button"
+                  className="stage-link locked"
+                  aria-label={`${copy[stage.id]} locked`}
+                  onClick={() => {
+                    explainLockedStage(stage.id);
+                    setNavOpen(false);
+                    navigate(access.requiredPath);
+                  }}
+                >
+                  <span className="stage-number">0{index + 1}</span>
+                  <Icon size={17} />
+                  <strong>{copy[stage.id]}</strong>
+                  <LockKeyhole size={13} />
+                </button>
+              );
+            }
             return (
               <NavLink
                 key={stage.id}
                 to={stage.path}
                 onClick={() => setNavOpen(false)}
-                className={({ isActive }) => isActive ? "stage-link active" : "stage-link"}
+                className={({ isActive }) => `stage-link ${isActive ? "active" : ""} ${access.completed ? "completed" : ""}`}
               >
                 <span className="stage-number">0{index + 1}</span>
                 <Icon size={17} />
                 <strong>{copy[stage.id]}</strong>
-                <ChevronRight size={14} />
+                {access.completed ? <Check size={14} /> : <ChevronRight size={14} />}
               </NavLink>
             );
           })}
@@ -194,10 +287,18 @@ function App() {
                 datasets={datasetsQuery.data!}
                 workspace={workspace}
                 onRefresh={refresh}
+                operation={operation}
               />
             }
           />
-          <Route path="/baseline" element={<BaselinePage locale={locale} workspace={workspace} />} />
+          <Route
+            path="/baseline"
+            element={
+              <StageGate allowed={workflow.dataReady} locale={locale} requiredPath="/data" requiredStage="data">
+                <BaselinePage locale={locale} workspace={workspace} />
+              </StageGate>
+            }
+          />
           <Route
             path="/diagnosis"
             element={
@@ -207,35 +308,42 @@ function App() {
                 latestRun={latestRun}
                 onRun={acceptRun}
                 openTrace={() => setTraceOpen(true)}
+                operation={operation}
               />
             }
           />
           <Route
             path="/plan"
             element={
-              <PlanPage
-                locale={locale}
-                workspace={workspace}
-                latestRun={latestRun}
-                proposalIds={proposalIds}
-                setProposalIds={setProposalIds}
-                onRun={acceptRun}
-                onRefresh={refresh}
-                openTrace={() => setTraceOpen(true)}
-              />
+              <StageGate allowed={workflow.diagnosisCompleted} locale={locale} requiredPath="/diagnosis" requiredStage="diagnosis">
+                <PlanPage
+                  locale={locale}
+                  workspace={workspace}
+                  latestRun={latestRun}
+                  proposalIds={proposalIds}
+                  setProposalIds={setProposalIds}
+                  onRun={acceptRun}
+                  onRefresh={refresh}
+                  openTrace={() => setTraceOpen(true)}
+                  operation={operation}
+                />
+              </StageGate>
             }
           />
           <Route
             path="/track"
             element={
-              <TrackPage
-                locale={locale}
-                workspace={workspace}
-                latestRun={latestRun}
-                onRun={acceptRun}
-                onRefresh={refresh}
-                openTrace={() => setTraceOpen(true)}
-              />
+              <StageGate allowed={workflow.planCommitted} locale={locale} requiredPath="/plan" requiredStage="plan">
+                <TrackPage
+                  locale={locale}
+                  workspace={workspace}
+                  latestRun={latestRun}
+                  onRun={acceptRun}
+                  onRefresh={refresh}
+                  openTrace={() => setTraceOpen(true)}
+                  operation={operation}
+                />
+              </StageGate>
             }
           />
           <Route path="*" element={<Navigate to="/data" replace />} />
@@ -260,6 +368,8 @@ function App() {
         fallbackTrace={workspace.agents.trace}
       />
       <ChatDrawer open={chatOpen} onClose={() => setChatOpen(false)} locale={locale} />
+      {guideNotice && <GuideNotice message={guideNotice} onClose={() => setGuideNotice(null)} />}
+      {activeOperation && <WorkInProgress operation={activeOperation} locale={locale} />}
     </div>
   );
 }
@@ -352,12 +462,14 @@ function DataPage({
   datasets,
   workspace,
   onRefresh,
+  operation,
 }: {
   locale: Locale;
   status: Status;
   datasets: Datasets;
   workspace: Workspace;
   onRefresh: (workspace?: Workspace) => void;
+  operation: OperationController;
 }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -378,6 +490,7 @@ function DataPage({
   }, [profileQuery.data, profileDraft]);
 
   const importMutation = useMutation({
+    onMutate: () => operation.start("import"),
     mutationFn: async () => {
       let confirmed = true;
       if (status.data.available) {
@@ -406,15 +519,18 @@ function DataPage({
       onRefresh(data.workspace);
       navigate("/baseline");
     },
+    onSettled: () => operation.finish(),
   });
 
   const saveProfileMutation = useMutation({
+    onMutate: () => operation.start("profile"),
     mutationFn: () => api.saveProfile(profileDraft || {}),
     onSuccess: (data) => {
       queryClient.setQueryData(["workspace"], data.workspace);
       queryClient.setQueryData(["profile"], { profile: data.profile });
       onRefresh(data.workspace);
     },
+    onSettled: () => operation.finish(),
   });
 
   const selected = datasets.datasets.find((item) => item.id === dataset);
@@ -636,6 +752,7 @@ function BaselinePage({ locale, workspace }: { locale: Locale; workspace: Worksp
         description={localText(workspace.household.profile_origin, locale)}
         actions={<DataBadge workspace={workspace} locale={locale} />}
       />
+      <AnalysisStateBanner locale={locale} complete kind="baseline" />
       <section className="metric-grid">
         <Metric icon={<Zap />} label={locale === "zh" ? "折算月用电" : "Monthly energy"} value={headline.kwh_this_month.display} accent="lime" />
         <Metric icon={<Gauge />} label={locale === "zh" ? "日均用电" : "Daily average"} value={headline.avg_daily_kwh.display} />
@@ -714,16 +831,22 @@ function DiagnosisPage({
   latestRun,
   onRun,
   openTrace,
+  operation,
 }: {
   locale: Locale;
   workspace: Workspace;
   latestRun: AgentRun | null;
   onRun: (run: AgentRun, workspace?: Workspace) => void;
   openTrace: () => void;
+  operation: OperationController;
 }) {
+  const workflow = workflowOf(workspace);
+  const diagnosisRun = latestRun?.operation === "diagnose" ? latestRun : null;
   const mutation = useMutation({
+    onMutate: () => operation.start("diagnosis"),
     mutationFn: () => api.diagnose(locale),
     onSuccess: (data) => onRun(data.run, data.workspace),
+    onSettled: () => operation.finish(),
   });
   if (!workspace.diagnosis.available) return <NoData locale={locale} />;
   const diagnosis = workspace.diagnosis;
@@ -743,7 +866,14 @@ function DiagnosisPage({
         }
       />
       {mutation.error && <ErrorBanner error={mutation.error} />}
-      {latestRun?.mode === "mock" && <MockBanner locale={locale} />}
+      <AnalysisStateBanner
+        locale={locale}
+        complete={workflow.diagnosisCompleted}
+        pending={mutation.isPending}
+        kind="diagnosis"
+        traceCount={diagnosisRun?.trace.length || (workflow.lastOperation === "diagnosis" ? workspace.agents.trace.length : 0)}
+      />
+      {diagnosisRun?.mode === "mock" && <MockBanner locale={locale} />}
       <section className="diagnosis-layout">
         <div className="panel">
           <PanelTitle icon={<Gauge />} label={`NILM / ${diagnosis.days || 28} DAYS`} title={locale === "zh" ? "六类负载分解" : "Six-category disaggregation"} />
@@ -780,9 +910,15 @@ function DiagnosisPage({
           <AccuracyCard accuracy={diagnosis.accuracy} locale={locale} />
         </div>
       </section>
-      <AgentSection workspace={workspace} locale={locale} latestRun={latestRun} openTrace={openTrace} />
-      {latestRun && (
-        <AgentMemo run={latestRun} locale={locale} />
+      <AgentSection
+        workspace={workspace}
+        locale={locale}
+        latestRun={diagnosisRun}
+        openTrace={openTrace}
+        fallbackEnabled={workflow.lastOperation === "diagnosis"}
+      />
+      {diagnosisRun && (
+        <AgentMemo run={diagnosisRun} locale={locale} />
       )}
     </>
   );
@@ -797,6 +933,7 @@ function PlanPage({
   onRun,
   onRefresh,
   openTrace,
+  operation,
 }: {
   locale: Locale;
   workspace: Workspace;
@@ -806,7 +943,10 @@ function PlanPage({
   onRun: (run: AgentRun, workspace?: Workspace) => void;
   onRefresh: (workspace?: Workspace) => void;
   openTrace: () => void;
+  operation: OperationController;
 }) {
+  const workflow = workflowOf(workspace);
+  const proposalRun = latestRun?.operation === "plan_proposal" ? latestRun : null;
   const candidates = workspace.plans.candidates || [];
   const committedSelectionKey = candidates
     .filter((item: any) => item.selected)
@@ -822,6 +962,7 @@ function PlanPage({
     }
   }, [proposalIds, workspace.plans.has_committed_plan, workspace.plans.version, committedSelectionKey]);
   const propose = useMutation({
+    onMutate: () => operation.start("proposal"),
     mutationFn: () => api.propose(locale),
     onSuccess: (data) => {
       const ids = (data.run.proposal?.actions || []).map((item: { id: string }) => item.id);
@@ -830,10 +971,13 @@ function PlanPage({
       setRationale(data.run.proposal?.rationale || "");
       onRun(data.run, data.workspace);
     },
+    onSettled: () => operation.finish(),
   });
   const commit = useMutation({
+    onMutate: () => operation.start("commit"),
     mutationFn: () => api.commit(selectedIds, rationale || (locale === "zh" ? "用户在 Web 界面确认的动作组合" : "Actions confirmed by the user in the Web interface")),
     onSuccess: (data) => onRefresh(data.workspace),
+    onSettled: () => operation.finish(),
   });
   if (!workspace.plans.available) return <NoData locale={locale} />;
   const plans = workspace.plans;
@@ -854,7 +998,14 @@ function PlanPage({
       />
       {propose.error && <ErrorBanner error={propose.error} />}
       {commit.error && <ErrorBanner error={commit.error} />}
-      {latestRun?.mode === "mock" && <MockBanner locale={locale} />}
+      <AnalysisStateBanner
+        locale={locale}
+        complete={proposalIds.length > 0}
+        pending={propose.isPending}
+        kind="proposal"
+        traceCount={proposalRun?.trace.length || (workflow.lastOperation === "plan_proposal" ? workspace.agents.trace.length : 0)}
+      />
+      {proposalRun?.mode === "mock" && <MockBanner locale={locale} />}
       <section className="plan-summary-strip">
         <div><small>{locale === "zh" ? "全部可行潜力" : "Feasible potential"}</small><strong>{plans.potential_per_month?.kwh ?? "—"} kWh</strong></div>
         <div><small>{locale === "zh" ? "金额" : "Cost"}</small><strong>{plans.potential_per_month?.cost?.display || "—"}</strong></div>
@@ -865,9 +1016,10 @@ function PlanPage({
         {candidates.map((action: any) => {
           const selected = selectedIds.includes(action.id);
           return (
-            <article className={`action-card ${selected ? "selected" : ""}`} key={action.id}>
+            <article className={`action-card ${selected ? "selected" : ""} ${proposalIds.length ? "" : "awaiting-proposal"}`} key={action.id}>
               <button
                 className="action-select"
+                disabled={!proposalIds.length}
                 onClick={() => setSelectedIds(selected
                   ? selectedIds.filter((id) => id !== action.id)
                   : [...selectedIds, action.id])}
@@ -908,20 +1060,28 @@ function PlanPage({
           <span className="eyebrow">USER CONFIRMATION GATE</span>
           <h2>{locale === "zh" ? `确认 ${selectedIds.length} 项动作` : `Confirm ${selectedIds.length} actions`}</h2>
           <p>{locale === "zh" ? "此按钮是唯一会写入正式计划版本的入口。" : "This is the only action that persists an active plan version."}</p>
+          {!proposalIds.length && <p className="gate-hint"><LockKeyhole size={12} />{locale === "zh" ? "先运行上方 Agent 提案，才可选择并提交动作。" : "Run the agent proposal before selecting and committing actions."}</p>}
         </div>
         <textarea
           value={rationale}
           onChange={(event) => setRationale(event.target.value)}
           placeholder={locale === "zh" ? "为什么选择这组动作（可编辑）" : "Why this action set (editable)"}
         />
-        <button className="button lime" disabled={!selectedIds.length || commit.isPending} onClick={() => commit.mutate()}>
+        <button className="button lime" disabled={!proposalIds.length || !selectedIds.length || commit.isPending} onClick={() => commit.mutate()}>
           {commit.isPending ? <LoaderCircle className="spin" size={16} /> : <LockKeyhole size={16} />}
           {locale === "zh" ? "确认并提交正式计划" : "Confirm & commit plan"}
         </button>
       </section>
       {plans.has_committed_plan && <Schedule schedule={plans.seven_day_schedule || []} locale={locale} version={plans.version} />}
-      <AgentSection workspace={workspace} locale={locale} latestRun={latestRun} openTrace={openTrace} compact />
-      {latestRun?.proposal && <AgentMemo run={latestRun} locale={locale} />}
+      <AgentSection
+        workspace={workspace}
+        locale={locale}
+        latestRun={proposalRun}
+        openTrace={openTrace}
+        compact
+        fallbackEnabled={workflow.lastOperation === "plan_proposal"}
+      />
+      {proposalRun?.proposal && <AgentMemo run={proposalRun} locale={locale} />}
     </>
   );
 }
@@ -933,6 +1093,7 @@ function TrackPage({
   onRun,
   onRefresh,
   openTrace,
+  operation,
 }: {
   locale: Locale;
   workspace: Workspace;
@@ -940,14 +1101,20 @@ function TrackPage({
   onRun: (run: AgentRun, workspace?: Workspace) => void;
   onRefresh: (workspace?: Workspace) => void;
   openTrace: () => void;
+  operation: OperationController;
 }) {
+  const workflow = workflowOf(workspace);
+  const reviewRun = latestRun?.operation === "review" ? latestRun : null;
   const [adherence, setAdherence] = useState(85);
   const [trackingFile, setTrackingFile] = useState<File | null>(null);
   const simulate = useMutation({
+    onMutate: () => operation.start("tracking"),
     mutationFn: () => api.simulateWeek(adherence / 100),
     onSuccess: (data) => onRefresh(data.workspace),
+    onSettled: () => operation.finish(),
   });
   const upload = useMutation({
+    onMutate: () => operation.start("tracking"),
     mutationFn: () => {
       if (!trackingFile) throw new ApiError("invalid_input", "请选择实施后 CSV", 422);
       const form = new FormData();
@@ -957,10 +1124,13 @@ function TrackPage({
       return api.importTracking(form);
     },
     onSuccess: (data) => onRefresh(data.workspace),
+    onSettled: () => operation.finish(),
   });
   const review = useMutation({
+    onMutate: () => operation.start("review"),
     mutationFn: () => api.review(locale),
     onSuccess: (data) => onRun(data.run, data.workspace),
+    onSettled: () => operation.finish(),
   });
   if (!workspace.plans.has_committed_plan) {
     return (
@@ -989,6 +1159,21 @@ function TrackPage({
       />
       {trackingKind === "synthetic" && <MockDataBanner locale={locale} />}
       {[simulate.error, upload.error, review.error].filter(Boolean).map((error, index) => <ErrorBanner error={error} key={index} />)}
+      <AnalysisStateBanner
+        locale={locale}
+        complete={workflow.trackingReady}
+        pending={simulate.isPending || upload.isPending}
+        kind="tracking"
+      />
+      {workflow.trackingReady && (
+        <AnalysisStateBanner
+          locale={locale}
+          complete={workflow.reviewCompleted}
+          pending={review.isPending}
+          kind="review"
+          traceCount={reviewRun?.trace.length || (workflow.lastOperation === "review" ? workspace.agents.trace.length : 0)}
+        />
+      )}
       <section className="tracking-entry-grid">
         <div className="panel fast-forward">
           <PanelTitle icon={<Play />} label="DEMO FAST-FORWARD" title={locale === "zh" ? "演示快进一周" : "Fast-forward one week"} />
@@ -1067,8 +1252,15 @@ function TrackPage({
           )) : <p className="muted">{locale === "zh" ? "复盘产生可靠结论后写入；聊天记录本身不会冒充长期记忆。" : "Written only after a justified review; chat history is not treated as memory."}</p>}
         </div>
       </section>
-      <AgentSection workspace={workspace} locale={locale} latestRun={latestRun} openTrace={openTrace} compact />
-      {latestRun && <AgentMemo run={latestRun} locale={locale} />}
+      <AgentSection
+        workspace={workspace}
+        locale={locale}
+        latestRun={reviewRun}
+        openTrace={openTrace}
+        compact
+        fallbackEnabled={workflow.lastOperation === "review"}
+      />
+      {reviewRun && <AgentMemo run={reviewRun} locale={locale} />}
     </>
   );
 }
@@ -1079,14 +1271,17 @@ function AgentSection({
   latestRun,
   openTrace,
   compact = false,
+  fallbackEnabled = false,
 }: {
   workspace: Workspace;
   locale: Locale;
   latestRun: AgentRun | null;
   openTrace: () => void;
   compact?: boolean;
+  fallbackEnabled?: boolean;
 }) {
-  const trace = latestRun?.trace || workspace.agents.trace;
+  const trace = latestRun?.trace || (fallbackEnabled ? workspace.agents.trace : []);
+  const showCalls = Boolean(latestRun) || fallbackEnabled;
   return (
     <section className={`agent-section ${compact ? "compact" : ""}`}>
       <div className="agent-section-head">
@@ -1100,7 +1295,7 @@ function AgentSection({
             <div className="agent-avatar">{agent.has_veto ? <ShieldCheck /> : <Bot />}</div>
             <strong>{localText(agent.name, locale)}</strong>
             <p>{localText(agent.mission, locale)}</p>
-            <small>{agent.calls_in_last_run} calls</small>
+            <small>{showCalls ? agent.calls_in_last_run : 0} calls</small>
           </article>
         ))}
       </div>
@@ -1311,6 +1506,218 @@ function Quality({ label, value }: { label: string; value: string }) {
 
 function DataBadge({ workspace, locale }: { workspace: Workspace; locale: Locale }) {
   return <span className={`large-data-badge ${workspace.meta.data_kind}`}><Database size={16} />{localText(workspace.meta.data_badge, locale)}</span>;
+}
+
+function StageGate({
+  allowed,
+  locale,
+  requiredPath,
+  requiredStage,
+  children,
+}: {
+  allowed: boolean;
+  locale: Locale;
+  requiredPath: string;
+  requiredStage: "data" | "diagnosis" | "plan";
+  children: ReactNode;
+}) {
+  if (allowed) return <>{children}</>;
+  const messages = {
+    data: {
+      zh: ["先建立数据基线。", "上传真实 CSV 或建立合成家庭后，才能进入后续分析。", "前往数据接入"],
+      en: ["Build the data baseline first.", "Upload a real CSV or create a synthetic household before continuing.", "Go to Data"],
+    },
+    diagnosis: {
+      zh: ["计划阶段尚未解锁。", "当前候选数字来自 Python 预计算；请先完成一次 Agent 诊断，形成可审计分析记录。", "前往诊断"],
+      en: ["The Plan stage is locked.", "Candidate numbers are Python pre-calculations. Complete an agent diagnosis to create an auditable analysis.", "Go to Diagnosis"],
+    },
+    plan: {
+      zh: ["追踪阶段尚未解锁。", "请先让 Agent 提出建议，并由你确认提交一份正式计划。", "前往计划"],
+      en: ["The Track stage is locked.", "Ask the agent for a proposal and confirm a committed plan first.", "Go to Plan"],
+    },
+  }[requiredStage][locale];
+  return (
+    <>
+      <PageIntro eyebrow="WORKFLOW GATE" title={messages[0]} description={messages[1]} />
+      <EmptyState
+        icon={<LockKeyhole />}
+        title={messages[0]}
+        action={<NavLink className="button lime" to={requiredPath}>{messages[2]}<ArrowRight size={15} /></NavLink>}
+      />
+    </>
+  );
+}
+
+function AnalysisStateBanner({
+  locale,
+  complete,
+  pending = false,
+  kind,
+  traceCount = 0,
+}: {
+  locale: Locale;
+  complete: boolean;
+  pending?: boolean;
+  kind: "baseline" | "diagnosis" | "proposal" | "tracking" | "review";
+  traceCount?: number;
+}) {
+  const content = {
+    baseline: {
+      waiting: {
+        zh: ["当前基线由 Python 现场计算", "这些指标和曲线不是预置截图；它们来自当前工作空间的数据。重新导入 CSV 后会重新计算。"],
+        en: ["Baseline computed by Python", "These metrics and charts are not preset screenshots. They come from the current workspace and are recomputed after every import."],
+      },
+      complete: {
+        zh: ["当前基线由 Python 现场计算", "这些指标和曲线不是预置截图；它们来自当前工作空间的数据。重新导入 CSV 后会重新计算。"],
+        en: ["Baseline computed by Python", "These metrics and charts are not preset screenshots. They come from the current workspace and are recomputed after every import."],
+      },
+    },
+    diagnosis: {
+      waiting: {
+        zh: ["Agent 尚未开始本次诊断", "下方 NILM 与发现是 Python 的确定性预分析。点击“运行本次 Agent 诊断”后，模型才会读取摘要、调用七角色工具并解锁计划阶段。"],
+        en: ["The agent has not run this diagnosis", "The NILM and findings below are deterministic Python pre-analysis. Run the agent to interpret evidence, invoke seven-role tools and unlock Plan."],
+      },
+      complete: {
+        zh: ["本次 Agent 诊断已完成", `已形成 ${traceCount} 步可审计工具轨迹，计划阶段现已解锁。`],
+        en: ["Agent diagnosis completed", `${traceCount} auditable tool steps were produced. Plan is now unlocked.`],
+      },
+    },
+    proposal: {
+      waiting: {
+        zh: ["候选潜力已计算，Agent 尚未提案", "卡片中的 kWh、金额和碳排来自 Python；运行 Agent 提案后才会高亮建议动作并开放用户提交。"],
+        en: ["Potential calculated; no agent proposal yet", "Python owns the kWh, cost and carbon values. Run the proposal before actions can be selected and committed."],
+      },
+      complete: {
+        zh: ["Agent 建议草案已生成", `建议动作已高亮，并保留 ${traceCount} 步工具轨迹；只有你的确认才会写入正式计划。`],
+        en: ["Agent proposal is ready", `Suggested actions are highlighted with ${traceCount} tool steps. Only your confirmation persists a plan.`],
+      },
+    },
+    tracking: {
+      waiting: {
+        zh: ["等待实施后数据", "请选择演示快进或上传真实 CSV；没有实施后证据时不会开放复盘。"],
+        en: ["Waiting for post-plan data", "Choose demo fast-forward or upload a real CSV. Review stays locked without after-data evidence."],
+      },
+      complete: {
+        zh: ["实施后数据已经接入", "追踪指标已由 Python 重新计算，现在可以运行天气归一化复盘 Agent。"],
+        en: ["Post-plan data connected", "Python has recomputed tracking metrics. The weather-normalized review agent is now available."],
+      },
+    },
+    review: {
+      waiting: {
+        zh: ["复盘 Agent 尚未运行", "当前对比图是 Python 计算结果；运行复盘后，Agent 才会解释异常、判断归因可信度并写入可靠记忆。"],
+        en: ["The review agent has not run", "The comparison chart is a Python result. Run review to explain anomalies, assess attribution and store justified memories."],
+      },
+      complete: {
+        zh: ["本次复盘已完成", `已形成 ${traceCount} 步工具轨迹，并仅将有依据的结论写入长期记忆。`],
+        en: ["Review completed", `${traceCount} tool steps were recorded and only justified conclusions entered durable memory.`],
+      },
+    },
+  }[kind];
+  const state = pending ? "pending" : complete ? "complete" : "waiting";
+  const text = pending
+    ? locale === "zh"
+      ? ["请求正在执行", "请保持页面开启；下方过程窗口会持续显示当前工作。"]
+      : ["Request in progress", "Keep this page open. The live work panel shows the current activity."]
+    : content[complete ? "complete" : "waiting"][locale];
+  return (
+    <div className={`analysis-state ${state}`}>
+      <span>{pending ? <LoaderCircle className="spin" /> : complete ? <CheckCircle2 /> : <Sparkles />}</span>
+      <div><strong>{text[0]}</strong><p>{text[1]}</p></div>
+    </div>
+  );
+}
+
+function GuideNotice({ message, onClose }: { message: string; onClose: () => void }) {
+  return (
+    <div className="guide-notice" role="alert">
+      <span><LockKeyhole size={17} /></span>
+      <div><strong>WORKFLOW GUIDE</strong><p>{message}</p></div>
+      <button onClick={onClose} aria-label="close guide"><X size={15} /></button>
+    </div>
+  );
+}
+
+function WorkInProgress({
+  operation,
+  locale,
+}: {
+  operation: { kind: OperationKind; startedAt: number };
+  locale: Locale;
+}) {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    setElapsed(0);
+    const timer = window.setInterval(
+      () => setElapsed(Math.max(0, Math.floor((Date.now() - operation.startedAt) / 1000))),
+      500,
+    );
+    return () => window.clearInterval(timer);
+  }, [operation.kind, operation.startedAt]);
+
+  const operationContent: Record<OperationKind, Record<Locale, [string, string, string[]]>> = {
+    import: {
+      zh: ["正在建立家庭工作空间", "Python 正在读取真实数据并重建全部基线。", ["校验文件、列和单位", "排序并检查缺失时段", "接入天气与数据出处", "生成画像、指标与负荷曲线"]],
+      en: ["Building the household workspace", "Python is reading the dataset and rebuilding the complete baseline.", ["Validate file, columns and units", "Sort and inspect missing intervals", "Attach weather and provenance", "Build profile, metrics and load curves"]],
+    },
+    profile: {
+      zh: ["正在更新家庭约束", "舒适规则与目标将进入后续 Agent 决策。", ["验证画像字段", "保存舒适硬约束", "重算候选行动", "刷新工作空间"]],
+      en: ["Updating household constraints", "Comfort rules and goals will shape later agent decisions.", ["Validate profile fields", "Persist hard comfort rules", "Recompute candidate actions", "Refresh workspace"]],
+    },
+    diagnosis: {
+      zh: ["AI 正在分析当前家庭数据", "确定性工具与七个专业角色正在协作。", ["读取负荷、天气与家庭画像", "运行六类 NILM 负载分解", "成本、碳排与舒适角色核验", "总控整理证据与诊断结论"]],
+      en: ["AI is analysing this household", "Deterministic tools and seven specialist roles are collaborating.", ["Read load, weather and household profile", "Run six-category NILM", "Check cost, carbon and comfort", "Orchestrator assembles evidence and findings"]],
+    },
+    proposal: {
+      zh: ["Agent 正在形成行动建议", "所有节省数字由 Python 计算，模型负责取舍。", ["读取诊断证据", "量化全部候选动作", "Comfort Guardian 执行否决", "生成不落盘的建议草案"]],
+      en: ["Agent is preparing an action proposal", "Python owns the savings numbers; the model makes trade-offs.", ["Read diagnosis evidence", "Quantify all candidate actions", "Apply Comfort Guardian vetoes", "Create a non-persisted proposal"]],
+    },
+    commit: {
+      zh: ["正在提交正式计划", "系统只保存你刚刚确认的动作组合。", ["复核动作 ID 与约束", "创建计划版本", "计算正式预期收益", "生成七日执行日历"]],
+      en: ["Committing the formal plan", "Only the action set you confirmed will be persisted.", ["Verify action IDs and constraints", "Create plan version", "Compute committed benefits", "Generate seven-day schedule"]],
+    },
+    tracking: {
+      zh: ["正在整理实施后数据", "Python 正在追加数据并重新计算追踪证据。", ["检查时间必须晚于基线", "追加真实或合成读数", "同步天气信息", "重算计划达成指标"]],
+      en: ["Processing post-plan data", "Python is appending readings and recomputing tracking evidence.", ["Verify timestamps follow baseline", "Append real or synthetic readings", "Align weather evidence", "Recompute plan achievement"]],
+    },
+    review: {
+      zh: ["AI 正在进行天气归一化复盘", "Agent 正在核验真实节省、异常与可写入记忆的结论。", ["读取正式计划与实施后数据", "计算天气归一化预期", "判断分行动归因可信度", "生成复盘并更新长期记忆"]],
+      en: ["AI is running a weather-normalized review", "The agent is checking savings, anomalies and justified memories.", ["Read plan and post-plan evidence", "Compute weather-normalized expectation", "Assess action attribution reliability", "Write review and durable memory"]],
+    },
+  };
+  const content = operationContent[operation.kind][locale];
+  const steps = content[2];
+  const activeIndex = Math.min(Math.floor(elapsed / 3), steps.length - 1);
+  const visualProgress = Math.min(18 + elapsed * 5, 92);
+  return (
+    <div className="work-overlay" role="status" aria-live="polite" aria-label={content[0]}>
+      <section className="work-card">
+        <div className="agent-loader" aria-hidden="true">
+          <span className="loader-ring ring-one" />
+          <span className="loader-ring ring-two" />
+          <span className="loader-core"><Bot size={26} /></span>
+          {Array.from({ length: 7 }, (_, index) => <i key={index} style={{ "--node": index } as CSSProperties} />)}
+        </div>
+        <span className="eyebrow">LIVE WORK / {String(elapsed).padStart(2, "0")}S</span>
+        <h2>{content[0]}</h2>
+        <p className="work-lede">{content[1]}</p>
+        <div className="work-progress"><span style={{ width: `${visualProgress}%` }} /></div>
+        <ol className="work-steps">
+          {steps.map((step, index) => (
+            <li key={step} className={index < activeIndex ? "done" : index === activeIndex ? "active" : ""}>
+              <span>{index < activeIndex ? <Check size={12} /> : index === activeIndex ? <LoaderCircle className="spin" size={12} /> : index + 1}</span>
+              <strong>{step}</strong>
+            </li>
+          ))}
+        </ol>
+        <p className="work-disclaimer">
+          <ShieldCheck size={13} />
+          {locale === "zh"
+            ? "过程提示表示当前请求的工作范围；最终完成状态与真实工具轨迹以 API 返回为准。"
+            : "Activity labels describe the current request scope. Completion and tool trace are confirmed only by the API response."}
+        </p>
+      </section>
+    </div>
+  );
 }
 
 function MockBanner({ locale }: { locale: Locale }) {

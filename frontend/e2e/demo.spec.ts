@@ -10,6 +10,14 @@ test("current workspace exposes the five-stage Python-backed workflow", async ({
   await expect(page.getByText("追踪与记忆", { exact: true })).toBeVisible();
 });
 
+test("locked stages explain the prerequisite instead of silently skipping", async ({ page }) => {
+  await page.goto("/data");
+  await page.getByRole("button", { name: "计划 locked" }).click();
+  await expect(page).toHaveURL(/\/diagnosis$/);
+  await expect(page.getByText(/计划阶段尚未解锁/)).toBeVisible();
+  await expect(page.getByText("Agent 尚未开始本次诊断")).toBeVisible();
+});
+
 test("synthetic household completes diagnosis, proposal, commit, tracking and review", async ({ page }) => {
   await page.goto("/data");
 
@@ -23,10 +31,17 @@ test("synthetic household completes diagnosis, proposal, commit, tracking and re
   await expect(page.getByText("合成演示数据", { exact: true })).toBeVisible();
 
   await page.getByRole("link", { name: /诊断/ }).click();
+  await page.route("**/api/v1/diagnose", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    await route.continue();
+  });
   await page.getByRole("button", { name: "运行本次 Agent 诊断" }).click();
+  await expect(page.getByRole("status", { name: "AI 正在分析当前家庭数据" })).toBeVisible();
   await expect(page.getByText("ORCHESTRATOR MEMO", { exact: true })).toBeVisible();
+  await expect(page.getByText("本次 Agent 诊断已完成")).toBeVisible();
 
   await page.getByRole("link", { name: /计划/ }).click();
+  await expect(page.getByText("候选潜力已计算，Agent 尚未提案")).toBeVisible();
   await page.getByRole("button", { name: "让 Agent 提出建议" }).click();
   await expect(page.locator(".action-card.selected").first()).toBeVisible();
   await page.getByRole("button", { name: "确认并提交正式计划" }).click();
