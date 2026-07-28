@@ -1,0 +1,30 @@
+{
+  "_说明": "把本文件复制为 config.json 并按需修改。密钥不要写在这里，只用环境变量。",
+
+  "llm": {
+    "provider": "deepseek",
+    "model": "deepseek-v4-pro",
+    "max_tokens": 8000,
+    "max_tool_rounds": 16,
+    "temperature": null,
+    "timeout_seconds": 180,
+    "max_retries": 3
+  },
+
+  "realdata": {
+    "dataset": "uci",
+    "window_days": 63,
+    "weather_source": "openmeteo"
+  },
+
+  "tariff": {
+    "plan": "regulated",
+    "regulated_rate_per_kwh": 0.2988,
+    "gst_rate": 0.09
+  },
+
+  "export": {
+    "out_dir": "data/web",
+    "emit_js": true
+  }
+}
