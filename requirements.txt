@@ -1,0 +1,16 @@
+# HomeShift AI 依赖清单
+#
+# 领域层仍只依赖 Python 3.10+ 标准库。以下依赖仅用于本地 Web Demo 的
+# FastAPI 接口、文件上传和开发服务器。
+fastapi>=0.115,<1
+uvicorn[standard]>=0.34,<1
+python-multipart>=0.0.20,<1
+pydantic>=2.10,<3
+#
+# 唯一的可选依赖：如果你更想用 Anthropic 官方 SDK（自带类型提示与更完善的
+# 重试策略），取消下一行注释。不装也能正常调用 Claude —— 项目内置了
+# 基于标准库的 HTTP 回退实现。
+# anthropic>=0.40.0
+#
+# 使用 DeepSeek / OpenAI / 通义 / Kimi / 智谱 / Ollama 等模型时
+# 不需要安装任何 SDK，详见 docs/07_multi-model-api-configuration.md
