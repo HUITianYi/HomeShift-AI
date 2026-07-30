@@ -36,8 +36,10 @@ from .api_models import (
 from .api_runtime import (
     ApiProblem,
     context_for,
+    mark_workflow_step,
     operation_response,
     public_settings,
+    require_workflow_step,
     reset_derived_state,
     run_agent,
     workspace_payload,
@@ -324,12 +326,18 @@ def create_app(root: Path | None = None) -> FastAPI:
             "evidence-based findings, method limits, and the next step."
         )
         run = run_agent(current, prompt, locale=body.locale, operation="diagnose")
+        mark_workflow_step(current, "diagnosis", run)
         return operation_response(current, run)
 
     @api.post("/api/v1/plan/propose")
     def propose_plan(body: LocaleRequest):
         current = ctx()
         require_data(current)
+        require_workflow_step(
+            current,
+            "diagnosis",
+            "请先完成本次 Agent 诊断，再请求计划建议。",
+        )
         prompt = WEB_PLAN_PROMPT_ZH if body.locale == "zh" else WEB_PLAN_PROMPT_EN
         run = run_agent(
             current,
@@ -344,12 +352,18 @@ def create_app(root: Path | None = None) -> FastAPI:
                 "Agent 未提交结构化 action_ids，未形成可确认建议。",
                 502,
             )
+        mark_workflow_step(current, "plan_proposal", run)
         return operation_response(current, run)
 
     @api.post("/api/v1/plan/commit")
     def commit_plan(body: PlanCommitRequest):
         current = ctx()
         require_data(current)
+        require_workflow_step(
+            current,
+            "plan_proposal",
+            "请先让 Agent 生成本次行动建议，再提交正式计划。",
+        )
         result = dispatch_tool(
             current,
             "save_plan",
@@ -357,6 +371,7 @@ def create_app(root: Path | None = None) -> FastAPI:
         )
         if result.get("error"):
             raise ApiProblem("invalid_input", result.get("message", "计划无法提交"), 422, result)
+        mark_workflow_step(current, "plan_commit")
         return {"plan": result["plan"], "workspace": workspace_payload(current)}
 
     @api.post("/api/v1/tracking/simulate-week")
@@ -372,6 +387,7 @@ def create_app(root: Path | None = None) -> FastAPI:
             "summary": summary,
         }
         _write_json(current.data_dir / "tracking_meta.json", marker)
+        mark_workflow_step(current, "tracking")
         return {"tracking": marker, "workspace": workspace_payload(current)}
 
     @api.post("/api/v1/tracking/import")
@@ -433,6 +449,7 @@ def create_app(root: Path | None = None) -> FastAPI:
         }
         _write_json(current.data_dir / "tracking_meta.json", marker)
         _append_tracking_provenance(current, marker)
+        mark_workflow_step(current, "tracking")
         return {"tracking": marker, "workspace": workspace_payload(current)}
 
     @api.post("/api/v1/review")
@@ -440,12 +457,19 @@ def create_app(root: Path | None = None) -> FastAPI:
         current = ctx()
         if not current.store.get_active_plan():
             raise ApiProblem("plan_missing", "请先确认并提交正式计划。", 409)
+        if not (current.data_dir / "tracking_meta.json").exists():
+            raise ApiProblem(
+                "tracking_missing",
+                "请先生成或上传实施后数据，再运行复盘 Agent。",
+                409,
+            )
         prompt = REVIEW_PROMPT if body.locale == "zh" else (
             "Review the active plan using weather-normalized tracking. Explain total "
             "savings, action-level reliability, anomalies, next-week advice, and record "
             "a durable insight only when justified."
         )
         run = run_agent(current, prompt, locale=body.locale, operation="review")
+        mark_workflow_step(current, "review", run)
         return operation_response(current, run)
 
     @api.post("/api/v1/chat")
