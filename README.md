@@ -1,44 +1,212 @@
-# HomeShift AI
+<div align="center">
 
-> **Cut bills, not comfort.** —— Agentic AI in Sustainability 课程项目
+<h1>HomeShift AI</h1>
 
-一个面向家庭能源管理的**智能体系统**：读取真实的半小时电表数据与气温，自主完成
-**诊断 → 规划 → 执行建议 → 追踪 → 反思调整** 的完整闭环，生成可解释、可执行、
-可持续调整的个性化节能计划。
+<p><strong>Real data. Coordinated agents. Verifiable action.</strong></p>
 
-**目标用户**：想降低电费和碳排、但没有能源专业知识的家庭。
+<p>
+面向真实家庭能源数据的智能体协作系统<br/>
+Agentic AI + Household Energy Copilot
+</p>
 
-**一句话定位**：**Agentic AI + Household Energy Copilot（家庭能源智能副驾）**。
+![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688?logo=fastapi&logoColor=white)
+![React](https://img.shields.io/badge/React-19-20232A?logo=react&logoColor=61DAFB)
+![TypeScript](https://img.shields.io/badge/TypeScript-5.8-3178C6?logo=typescript&logoColor=white)
+![Status](https://img.shields.io/badge/status-local%20full--stack%20demo-C8FF33?labelColor=171C18)
 
-当前 CDS 版本采用 **Python 领域层 + FastAPI + 解耦 Vite SPA**。Python 是所有业务
-数字的唯一事实来源；React 只负责交互与可视化，不复制能源公式。
+</div>
+
+HomeShift AI 不是一个带聊天框的电费仪表盘。它接入家庭总表、天气和舒适偏好，
+用确定性 Python 工具完成用电分解、费用与碳排计算，再由一个编排器协调七个专业
+角色完成解释、取舍、计划和复盘。
+
+最终目标是让普通家庭能够回答三个问题：
+
+1. **电为什么高？**
+2. **哪些行动真的值得做，而且不会牺牲舒适？**
+3. **实施后究竟有没有节省，还是只是天气变了？**
+
+当前版本面向课程展示和单家庭真实数据 Demo，完整跑通：
+
+```text
+数据接入 → 家庭画像 → 基线 → Agent 诊断 → 行动协商 → 用户确认 → 追踪与记忆
+```
+
+Python 是所有业务数字的唯一事实来源。React 只负责交互和可视化，不复制能源公式，
+LLM 也不能修改 kWh、金额、碳排或追踪结果。
 
 ---
 
-## 快速启动 Web Demo
+## 项目亮点
+
+| 能力 | HomeShift AI 的实现 |
+| --- | --- |
+| 真实数据接入 | UCI 公开家庭数据、SP Group CSV、通用 CSV 和可重复生成的合成家庭 |
+| 数据与天气对齐 | 半小时重采样、单位换算、质量检查，以及 Open-Meteo / data.gov.sg 天气 |
+| 家庭负荷诊断 | 六类 NILM 分解、48 时段平均曲线、逐日用电与天气、证据与局限说明 |
+| Agent 协作 | 单编排器协调七个职责角色，每次工具调用都有角色归属和本次运行 Trace |
+| 舒适约束 | Comfort Guardian 拥有硬否决权，不合适的行动不会被伪装成“最佳方案” |
+| 人在回路 | Agent 只能提出草案，用户确认后才会保存正式计划和版本 |
+| 效果追踪 | 同时支持显式标记的合成快进和真实实施后 CSV |
+| 可信复盘 | 比较基线、天气归一化预期与实际用电，并标记不可测量或不可信归因 |
+| 长期记忆 | 只保存结构化、可解释的可靠结论，而不是无限增长的聊天记录 |
+| 多模型 | DeepSeek、OpenAI、Claude、Qwen、Kimi、GLM、Ollama 和自定义兼容端点 |
+| 完整 Web Demo | FastAPI + Vite React SPA，中英文切换、阶段引导、工作动画、Trace、Chat 和 HTML 报告 |
+
+---
+
+## 五阶段产品闭环
+
+### 01 · Data / 数据接入
+
+- 选择 UCI、SP Group、通用 CSV 或合成家庭。
+- 识别时间列、用电列和单位，支持 kWh、Wh、kW、W。
+- 选择 Open-Meteo、data.gov.sg 或不使用天气。
+- 展示来源、许可、日期范围、完整度、缺失时段和已知局限。
+- 审核系统从负荷曲线推断的家庭画像、节能目标和舒适约束。
+
+重新导入家庭数据需要明确确认。确认后会清空旧诊断、计划、追踪、复盘、记忆和
+Agent Trace，避免不同家庭的数据串线。
+
+### 02 · Baseline / 基线
+
+- 月度折算用电、日均用电、账单和碳排放。
+- 一天 48 个半小时时段的平均负荷形状。
+- 逐日用电与温度叠加图。
+- 高低用电日、峰值时段、证据文件和数据质量提示。
+- 币种、电价和碳因子跟随当前地区配置。
+
+页面中的指标来自当前 Python 工作空间，并在每次导入后重新计算，不是静态截图。
+
+### 03 · Diagnosis / 诊断
+
+- Python 先生成确定性基线、NILM 和证据摘要。
+- Agent 再读取画像、用电、天气、电价、碳因子和负荷分解结果进行解释。
+- 页面展示六类负荷、前三项发现、计算周期、方法边界和置信依据。
+- 有分表真值时展示误差；没有真值时明确说明无法定量验证。
+- 本次工具调用按顺序形成可审计 Trace。
+
+模型运行期间，页面会显示当前阶段、已等待时间和正在处理的任务。动画用于解释正在
+执行的请求，不伪造后端流式事件；完成状态和 Trace 只以 API 实际返回为准。
+
+### 04 · Plan / 计划
+
+- 展示全部候选行动，而不是人为制造三套固定套餐。
+- 每项行动包含节省 kWh、费用、CO₂、难度和舒适影响。
+- 单独展示被 Comfort Guardian 否决的行动、理由和主动放弃的收益。
+- Agent 推荐项默认选中，用户可以增删。
+- `plan/propose` 只产生不落盘的草案。
+- 只有用户点击确认，`plan/commit` 才生成正式版本和七日执行表。
+
+### 05 · Track & Memory / 追踪与记忆
+
+- “演示快进一周”生成有永久标记的合成实施后数据。
+- “上传真实实施后 CSV”以追加模式写入，不覆盖基线和计划版本。
+- 比较基线、天气归一化预期和实际用电。
+- 计算总体节省、达成率和分行动可信度。
+- 对异常结果标记 `not_measurable` 或 `implausible`，不包装成超额成功。
+- Review Agent 形成下周建议，并把可靠洞察写入长期记忆。
+
+前后端共同执行顺序约束：未完成 Agent 诊断不能进入 Plan，未提交正式计划不能进入
+Track，没有实施后数据不能运行 Review。
+
+---
+
+## 系统架构
+
+```mermaid
+flowchart LR
+    USER["家庭用户"] --> SPA["Vite + React SPA<br/>五阶段工作流"]
+    SPA --> API["FastAPI /api/v1<br/>Pydantic 契约"]
+    API --> CTX["请求级 AppContext"]
+
+    CTX --> DATA["UsageStore + JSON Store<br/>电表 / 画像 / 计划 / 记忆"]
+    CTX --> DOMAIN["Python 领域层<br/>NILM / 电价 / 碳排 / 舒适 / 追踪"]
+    CTX --> ORCH["单一 Agent 编排器"]
+
+    ORCH --> ROLES["七个专业责任角色"]
+    ROLES --> TOOLS["结构化工具调用"]
+    TOOLS --> DOMAIN
+    ORCH --> LLM["显式选择的实时模型<br/>或手动 Mock 彩排"]
+
+    DOMAIN --> WORKSPACE["实时 Workspace Payload"]
+    DATA --> WORKSPACE
+    WORKSPACE --> API
+```
+
+### 事实与决策的边界
+
+| 层 | 负责什么 | 不负责什么 |
+| --- | --- | --- |
+| React SPA | 输入、状态引导、图表、Trace、Chat、报告入口 | 不计算业务数字，不保存 API Key |
+| FastAPI | 请求校验、顺序约束、模型路由、工作空间组装 | 不复制领域公式 |
+| Python 领域层 | kWh、费用、CO₂、NILM、候选收益、舒适否决、追踪 | 不生成营销式叙事 |
+| Agent 编排器 | 决定下一步调用哪个工具、解释证据、协调取舍 | 不编造或覆盖工具数字 |
+| LLM Provider | 语言推理和结构化工具选择 | 不直接写入正式计划 |
+
+### 为什么不是七个相互聊天的模型
+
+项目采用 **single-controller, multi-role** 架构：一个 LLM 工具循环负责调度，七个
+角色定义明确的责任边界、输入、输出和工具归属。这比七个独立会话轮流输出文本更适合
+能源场景：
+
+- 所有角色共享同一份家庭事实，数字不会互相矛盾。
+- 工具调用更少，延迟和成本更可控。
+- 每条 Trace 都能回答“谁调用了什么工具、看到了什么证据”。
+- Comfort Guardian 的否决权可以在系统层执行，而不只是提示词建议。
+
+---
+
+## 七个专业角色
+
+| # | 角色 | 责任 | 关键产物 |
+| --- | --- | --- | --- |
+| 1 | Data Steward / 数据管家 | 收集画像、用电和天气并检查证据质量 | 基线、负荷形状、证据摘要 |
+| 2 | Load Detective / 负载侦探 | 将家庭总表拆分为设备类别，并说明误差 | NILM 分类和方法边界 |
+| 3 | Cost Analyst / 成本分析师 | 按本地电价将 kWh 转换为费用 | 账单与行动节省金额 |
+| 4 | Carbon Analyst / 碳排分析师 | 按本地排放因子计算 CO₂ | 基线与行动碳排 |
+| 5 | Comfort Guardian / 舒适守门人 | 对违反锁定舒适规则的行动执行否决 | 否决理由与放弃收益 |
+| 6 | Planner / 规划师 | 量化候选、提出组合并生成执行日历 | 草案、正式计划、七日安排 |
+| 7 | Tracker & Memory / 追踪与记忆 | 天气归一化复盘并保存可靠洞察 | 达成率、可信度、长期记忆 |
+
+运行以下命令可查看角色花名册，并检查是否存在没有角色认领的工具：
+
+```powershell
+python -m homeshift agents
+```
+
+---
+
+## 快速启动
 
 ### 环境要求
 
-- Python 3.10 或更高版本
+- Python 3.10+
 - Node.js 20.19+ 或 22.12+
 - Windows PowerShell、macOS 或 Linux
 
-### 1. 启动 Python API
+### 1. 获取项目
 
-在项目根目录执行：
+```powershell
+git clone https://github.com/HUITianYi/HomeShift-AI.git
+cd HomeShift-AI
+```
+
+### 2. 启动 Python API
 
 ```powershell
 python -m pip install -r requirements.txt
 python -m uvicorn homeshift.api:app --host 127.0.0.1 --port 8000
 ```
 
-后端启动成功后：
+启动后可访问：
 
-- `http://127.0.0.1:8000`：自动跳转到 API 文档
-- `http://127.0.0.1:8000/docs`：FastAPI 交互式接口文档
-- `http://127.0.0.1:8000/api/v1/status`：运行状态
+- `http://127.0.0.1:8000`：跳转到 FastAPI 文档。
+- `http://127.0.0.1:8000/docs`：交互式 API 文档。
+- `http://127.0.0.1:8000/api/v1/status`：当前工作空间状态。
 
-### 2. 启动解耦前端
+### 3. 启动 React SPA
 
 另开一个终端：
 
@@ -50,413 +218,320 @@ npm.cmd run dev
 
 浏览器打开 `http://127.0.0.1:5173`。
 
-> Windows PowerShell 如果提示“禁止运行 `npm.ps1`”，直接使用上面的
-> `npm.cmd` 即可，不需要降低系统执行策略。macOS/Linux 使用 `npm`。
+> Windows PowerShell 如果禁止执行 `npm.ps1`，使用 `npm.cmd` 即可，不需要修改系统
+> 执行策略。macOS 和 Linux 使用 `npm`。
 
-### 3. 完整跑通一次
+### 4. 跑通完整 Demo
 
-1. 在 **Data** 页选择合成数据彩排，或上传 SP Group/通用 CSV。
-2. 审核系统推断的家庭画像和舒适约束。
-3. 在模型面板显式选择已配置的实时模型；没有密钥时可手动选择 Mock。
-4. 依次完成 **Diagnosis → Plan → 用户确认提交**。
-5. 在 **Track** 中选择“演示快进一周”或上传真实实施后 CSV，再运行复盘。
+1. 在 **Data** 选择合成家庭，或导入真实 CSV。
+2. 审核画像并确认舒适约束。
+3. 在 **Model** 面板选择实时模型，或明确选择 Mock 彩排。
+4. 依次完成 **Baseline → Diagnosis → Plan**。
+5. 修改 Agent 推荐的行动并确认提交正式计划。
+6. 在 **Track** 快进一周或上传真实实施后 CSV。
+7. 运行天气归一化 Review，查看达成率、建议与长期记忆。
 
-Mock 只模拟“LLM 决定下一步调用哪个工具”的过程；NILM、费用、碳排、舒适否决、
-候选收益和追踪计算仍全部运行真实 Python 代码。实时模型失败时 Web 不会自动降级
-或伪装成功。
+### 从干净状态重新演示
 
-页面会按当前工作状态逐步解锁：未完成 Agent 诊断时不能进入 Plan，未提交正式计划时
-不能进入 Track，未导入实施后数据时不能运行 Review。导入、画像更新、诊断、提案、
-提交、追踪和复盘期间会出现工作动画，显示当前处理范围、已等待时间和阶段性任务。
-这些文字是对正在执行请求的说明，不伪造后端流式事件；完成状态和工具轨迹只以 API
-真实返回为准。
+当前家庭工作空间会持久化在 `data/`，因此刷新网页后仍会看到上次运行结果。若要开始
+新一轮演示，在 Data 页面重新导入数据并确认重置即可；后端会保留新基线，清除旧诊断、
+计划、复盘、记忆和 Trace。
 
 ---
 
-## 30 秒看懂
+## 模型配置
 
-普通能源 App 只会说"这个月用了 543 度电"。HomeShift AI 会说：
+仓库不内置任何 API Key。网页不会要求输入、保存或回显密钥，实时模型只读取启动
+后端进程时已经配置的环境变量。
 
-1. **为什么高** —— "冰箱占 26.7%、待机负载占 19.3%，你家白天没人时仍有持续的
-   热水器保温损耗"（负载分解诊断，误差可对照分表真值定量验证）
-2. **怎么办** —— "做这 4 件事，每月省 19.21 元，不牺牲任何舒适度"
-   （量化计划，且**有一个角色专门负责否决那些会牺牲舒适的省钱方案**）
-3. **做得怎么样** —— "剔除气温变化后你真省了 0.8 kWh/天；但冰箱那条的达成率
-   显示 1100%，这不可信，更可能是负载分解的归类误差，请以总体数字为准"
-   （天气归一化追踪 + 归因可信度自检）
-
-三步分别对应 Agentic AI 的**感知与分析、规划与行动、反思与记忆**。
-
----
-
-
-
-### 路线 A：用真实数据（推荐，答辩用这条）
-
-```bash
-# 1. 一条命令搞定：下载真实数据集 -> 解析 -> 拉真实气温 -> 写入项目
-python fetch_real_data.py
-
-# 2. 看看数据是否就位
-python -m homeshift status
-
-# 3. Agent 诊断 -> 规划 -> 复盘
-python -m homeshift diagnose
-python -m homeshift plan
-python -m homeshift simulate-week      # 演示用：快进一周执行后的数据
-python -m homeshift review
-
-# 4. 导出给可视化网站
-python -m homeshift export-web
-
-# 5. 用真实分表数据验证负载分解到底准不准
-python -m homeshift eval-disagg
-```
-
-`fetch_real_data.py` 全自动，**不需要你懂任何数据处理**。它会下载数据集
-（多镜像、断点续传、进度条）、重采样到半小时、拉取同地点同时段的真实气温、
-挑一段完整度最高的连续窗口、从用电曲线反推家庭画像、记录数据出处，
-并把地区/币种/电价/碳因子写回配置。
-
-### 路线 B：不联网，用合成数据（课堂应急）
-
-```bash
-python -m homeshift init
-python -m homeshift diagnose
-```
-
----
-
-## 真实数据从哪来
-
-| 数据集 | 内容 | 为什么选它 |
-| --- | --- | --- |
-| `uci`（默认） | 法国单户，1 分钟粒度，2006–2010，**含 3 路分表** | 唯一免密钥、自带分电器真值的公开数据集 —— 能**定量验证**我们的负载分解算法 |
-| `spgroup` | 你自己家的 SP Group 导出 CSV | 最贴近产品真实场景（新加坡 HDB + 半小时总表） |
-| `csv` | 任意"时间 + 用电量"两列的 CSV | 接 Ausgrid、Low Carbon London 或老师给的任何数据 |
-
-气温统一来自 **Open-Meteo Historical Weather API**（ERA5 再分析，免密钥，
-全球任意坐标，1940 年至今）。这保证了无论用哪国的电表数据，都能拿到
-**同地点、同时段**的真实气温 —— 天气归一化才站得住脚。
-新加坡场景可改用 `--weather datagovsg` 拉 data.gov.sg 的实测观测站数据。
-
-```bash
-python fetch_real_data.py --list                    # 看有哪些数据集
-python fetch_real_data.py --dataset spgroup --file data/raw/my_meter.csv
-python fetch_real_data.py --dataset csv --file x.csv --time-col 时间 --value-col 电量
-python fetch_real_data.py --days 90 --weather none  # 换窗口长度 / 关闭天气
-```
-
-
-
----
-
-## 换模型：一行配置
-
-系统对 LLM 的依赖被抽象到一层接口后面，**换模型不需要改 Agent 一行代码**。
-
-```bash
-python -m homeshift providers    # 列出所有提供方与密钥状态
-python -m homeshift llm-test     # 测试当前模型能不能正确调用工具
-```
-
-用 DeepSeek：
-
-```bash
-export DEEPSEEK_API_KEY=sk-xxxx          # Windows: $env:DEEPSEEK_API_KEY="sk-xxxx"
-echo '{"llm": {"provider": "deepseek"}}' > config.json
-python -m homeshift diagnose
-```
-
-| provider | 说明 |
-| --- | --- |
-| `mock` | 离线剧本，零依赖零成本；Web 中必须由用户显式选择 |
-| `anthropic` | Claude 原生 Messages API |
-| `deepseek` | 模型 `deepseek-v4-pro` / `deepseek-v4-flash` |
-| `openai` / `qwen` / `kimi` / `zhipu` / `siliconflow` / `openrouter` | OpenAI 兼容 |
-| `ollama` | 本地模型，离线免费不上传数据 |
-| `custom` | 任意 OpenAI 兼容网关（自填 base_url） |
-
-> **注意**：DeepSeek 的旧模型名 `deepseek-chat` 与 `deepseek-reasoner` 已于
-> **2026-07-24 下线**，网上的老教程会让你拿到 404。本项目已使用新模型名。
-
-
-
----
-
-## 七个专家角色
-
-网站对外的叙事是「7 个 specialist agents 协作」。这**不是包装** —— 每个工具都
-归属于一个角色，每次调用都会记录"谁出手、看到什么、产出什么"，形成可审计的
-协作轨迹；其中**舒适守门人持有否决权**，是唯一能推翻其他角色结论的角色。
-
-```bash
-python -m homeshift agents      # 查看花名册，并自检"有没有工具没被认领"
-```
-
-| # | 角色 | 职责 | 工具 |
-| --- | --- | --- | --- |
-| 1 | 数据管家 Data Steward | 收齐证据并检查质量 | 画像 / 用电 / 天气 |
-| 2 | 负载侦探 Load Detective | 把总表拆成分类别用电（NILM） | 负载分解 |
-| 3 | 成本分析师 Cost Analyst | kWh → 钱 | 电价 |
-| 4 | 碳排分析师 Carbon Analyst | kWh → CO2 | 碳因子 |
-| 5 | **舒适守门人 Comfort Guardian** | **否决违反舒适约束的动作** | （作用于他人产物） |
-| 6 | 规划师 Planner | 量化候选、挑组合、落成计划 | 模拟 / 保存 / 读取计划 |
-| 7 | 追踪与记忆 Tracker & Memory | 归一化后测量真实效果并记住 | 追踪 / 反馈 / 记忆 |
-
-架构是 **单编排器 + 七个专职角色**：一个 LLM 循环决定下一个该谁出手，
-所有数字由角色对应的确定性工具算出 —— 模型不产生数字。
-
----
-
-## 全部命令
-
-| 命令 | 说明 |
-| --- | --- |
-| `python fetch_real_data.py` | **接入真实数据（一键，推荐）** |
-| `python -m homeshift init` | 生成合成演示数据 |
-| `python -m homeshift init-real` | 等价于 fetch_real_data.py |
-| `python -m homeshift status` | 系统状态：模型、数据来源、地区、计划 |
-| `python -m homeshift diagnose` | [Agent] 用电诊断 |
-| `python -m homeshift plan` | [Agent] 制定节能计划 |
-| `python -m homeshift simulate-week` | 快进一周执行数据（演示用） |
-| `python -m homeshift review` | [Agent] 周度复盘 |
-| `python -m homeshift chat` | 自由对话 |
-| `python -m homeshift report` | 生成 HTML 周报 |
-| `python -m homeshift export-web` | **导出网站数据包** |
-| `python -m homeshift eval-disagg` | 对照分表真值评估分解精度 |
-| `python -m homeshift providers` | 列出可用模型提供方 |
-| `python -m homeshift llm-test` | 测试模型连通性与工具调用 |
-| `python -m homeshift agents` | 查看七个角色 |
-| `python -m unittest` | 运行 Python 测试套件（48 个） |
-
----
-
-## 目录结构
-
-```
-homeshift/
-├── __main__.py        CLI 入口（15 个命令）
-├── api.py             FastAPI Web 入口与 /api/v1 公共接口
-├── api_models.py      Pydantic 写操作契约
-├── api_runtime.py     请求级上下文、显式模型路由、提案隔离
-├── config.py          全局配置（config.json 可覆盖任意字段）
-├── context.py         应用上下文
-├── agent/
-│   ├── core.py        Agent 核心：tool-use 循环 + 护栏 + 角色轨迹
-│   ├── roles.py       七个专家角色的定义与工具归属（含自检）
-│   ├── prompts.py     系统提示词与任务提示词
-│   └── tools.py       12 个工具的 Schema 与执行
-├── llm/
-│   ├── base.py            LLM 抽象接口
-│   ├── registry.py        提供方注册表（11 种）与配置解析
-│   ├── anthropic_client.py Claude 原生（SDK 可选，无 SDK 走内置 HTTP）
-│   ├── openai_compat.py   OpenAI 兼容协议 + 双向格式翻译
-│   └── mock_client.py     离线剧本（报告完全数据驱动）
-├── domain/            确定性计算引擎
-│   ├── disaggregate.py  负载分解（NILM，作息锚点可配置）
-│   ├── simulate.py      节能动作模拟器
-│   ├── comfort.py       舒适约束与否决权
-│   ├── tracker.py       效果追踪（天气归一化 + 归因可信度）
-│   ├── tariff.py        电价（多币种）
-│   └── carbon.py        碳排换算
-├── realdata/          真实数据接入
-│   ├── sources.py       数据集注册表
-│   ├── download.py      多镜像下载 + 断点续传
-│   ├── loaders.py       UCI / 通用 CSV 解析与重采样
-│   ├── weather.py       Open-Meteo / data.gov.sg
-│   └── pipeline.py      端到端流水线
-├── export/
-│   └── web_payload.py 网站数据包（双语、含字段说明书）
-├── datastore/         持久层
-├── datagen/           合成数据生成器
-├── connectors/        实时 API 预留接口
-└── report/            HTML 周报
-frontend/              解耦的 Vite + React + TypeScript SPA
-├── src/api.ts           Zod 响应契约与 API 客户端
-├── src/App.tsx          五阶段产品流程、模型/Trace/Chat 抽屉
-├── src/styles.css       原视觉语言的响应式实现
-└── e2e/                 Playwright 隔离式完整闭环测试
-fetch_real_data.py     一键真实数据脚本
-tests/                 Python 单元与 API 测试（48 个）
-docs/                  详细文档
-```
-
----
-
-## Web Demo：解耦前端 + Python 单一事实源
-
-新前端位于 `frontend/`，是一个独立的 Vite SPA。它不导入旧 TypeScript 项目的
-能源公式，也不在运行时读取 `data/web/*.json`；所有业务状态都通过 FastAPI
-从当前 Python 工作空间实时组装。
-
-### 本地启动
+PowerShell 示例：
 
 ```powershell
-# 终端 1：Python API
-python -m pip install -r requirements.txt
-python -m uvicorn homeshift.api:app --host 127.0.0.1 --port 8000
-
-# 终端 2：React SPA
-cd frontend
-npm.cmd install
-npm.cmd run dev
+$env:DEEPSEEK_API_KEY="your-key"
+python -m homeshift providers
+python -m homeshift llm-test
 ```
 
-浏览器打开 `http://127.0.0.1:5173`。API 文档位于
-`http://127.0.0.1:8000/docs`。
+在 `config.json` 中选择提供方：
 
-### 运行架构
-
-```mermaid
-flowchart LR
-    UI["React SPA<br/>五阶段界面"] --> API["FastAPI /api/v1<br/>Pydantic 契约"]
-    API --> CTX["请求级 AppContext"]
-    CTX --> DATA["UsageStore + Store<br/>CSV / JSON"]
-    CTX --> DOMAIN["Python 领域层<br/>NILM / 电价 / 碳排 / 舒适 / 追踪"]
-    CTX --> ORCH["单一 Agent 编排器"]
-    ORCH --> ROLES["七个专业角色<br/>按工具责任划分"]
-    ORCH --> LLM["显式选择的实时模型<br/>或手动 Mock 彩排"]
-    DOMAIN --> API
-    ROLES --> DOMAIN
+```json
+{
+  "llm": {
+    "provider": "deepseek",
+    "model": "deepseek-v4-pro"
+  }
+}
 ```
 
-这里的“七角色”不是七个各自随意说话的大模型实例，而是一个编排器中的七种
-**责任边界**：数据管家、负载侦探、成本分析师、碳排分析师、舒适守门人、
-规划师、追踪与记忆。工具归属可以审计，Comfort Guardian 拥有唯一否决权。
-这种实现比“多个模型轮流输出一段文本”更稳定，也让每一步能追溯到工具证据。
+| Provider | 环境变量 | 接口类型 |
+| --- | --- | --- |
+| `mock` | 无 | 离线剧本；Web 中必须手动选择 |
+| `deepseek` | `DEEPSEEK_API_KEY` | OpenAI-compatible |
+| `openai` | `OPENAI_API_KEY` | OpenAI-compatible |
+| `anthropic` | `ANTHROPIC_API_KEY` | Claude Messages API |
+| `qwen` | `DASHSCOPE_API_KEY` / `QWEN_API_KEY` | OpenAI-compatible |
+| `kimi` | `MOONSHOT_API_KEY` / `KIMI_API_KEY` | OpenAI-compatible |
+| `zhipu` | `ZHIPU_API_KEY` / `GLM_API_KEY` | OpenAI-compatible |
+| `siliconflow` | `SILICONFLOW_API_KEY` | OpenAI-compatible |
+| `openrouter` | `OPENROUTER_API_KEY` | OpenAI-compatible |
+| `ollama` | 通常无需 Key | 本地 OpenAI-compatible |
+| `custom` | `LLM_API_KEY`，可选 | 自定义兼容网关 |
 
-### 五阶段闭环
+Mock 只替代“下一步调用哪个工具”的模型决策。数据处理、NILM、费用、碳排、舒适否决、
+候选收益和追踪仍执行真实 Python 代码。实时模型调用失败时不会自动降级为 Mock，也不会
+把失败伪装成成功。
 
-1. **Data**：选择 UCI、SP Group、通用 CSV 或合成家庭；完成列识别、单位换算、
-   天气接入、出处记录和画像审核。换家庭必须确认，确认后清空旧计划、记忆、
-   复盘和 Trace。
-2. **Baseline**：展示月度折算、日均、电费、碳排、48 时段平均曲线、逐日用电与
-   气温、证据文件和质量局限。币种跟随当前地区。
-3. **Diagnosis**：Python 先完成六类 NILM 和前三项数据发现；Agent 再调用工具解释。
-   两类结果在页面上明确区分；有分表真值时展示 MAE，没有时明确说明无法定量验证。
-   Agent 请求执行期间显示实时工作状态，成功返回后才记录完成并解锁 Plan。
-4. **Plan**：展示全部候选动作和 Comfort Guardian 否决项。Agent 只能产生不落盘
-   的建议草案；提案完成前候选卡不可勾选，用户增删并点击确认后，`plan/commit`
-   才生成正式版本与七日计划。
-5. **Track**：可明确选择“合成实施后数据”快进，或追加真实实施后 CSV。天气归一化
-   复盘会标记 `not_measurable` / 异常归因，并只把可靠结论写入长期记忆；没有
-   实施后数据时前后端都会阻止提前复盘。
+更多配置见 [多模型 API 配置](docs/07_multi-model-api-configuration.md)。
 
-### 关键状态边界
+---
 
-| 边界 | 实现 |
-| --- | --- |
-| 数字归属 | kWh、金额、CO₂、NILM、候选收益和追踪全部由 Python 计算 |
-| 模型选择 | 网页只列出环境变量已配置的提供方，不接收、不保存、不回显 API Key |
-| Mock | 只有用户主动选择才启用；实时模型失败不会自动降级或伪装成功 |
-| 规划与提交 | Agent 提案使用内存代理 Store，不写文件；用户确认后才保存计划 |
-| Trace | API 响应只带本次运行；旧累计格式不作为“本次工作记录”展示 |
-| 顺序引导 | 工作空间持久化阶段完成状态；侧栏锁定未满足前置条件的页面，API 同时校验 |
-| 工作反馈 | 前端展示当前请求、阶段任务和耗时；成功与真实 Trace 只由 API 返回确认 |
-| 新家庭导入 | 清空旧计划、记忆、复盘、报告、追踪标记和 Agent Trace |
-| 实施后数据 | 模拟与真实上传使用不同标记；真实上传只追加，不覆盖基线 |
-| 工作空间 | 单一当前家庭；不做账号、多租户和数据库 |
+## 数据来源
 
-### 公共接口
+| 数据源 | 内容 | 适用场景 |
+| --- | --- | --- |
+| `synthetic` | 可重复生成的半小时家庭用电与分表真值 | 离线彩排和完整闭环演示 |
+| `uci` | 法国真实单户分钟级数据，包含 3 路分表 | 公开数据研究和 NILM 定量验证 |
+| `spgroup` | 用户自行导出的新加坡 SP Group CSV | 新加坡真实家庭演示 |
+| `csv` | 任意时间列 + 用电列 | 接入其他地区或自有数据 |
+
+通用 CSV 支持：
+
+- 自动或手工指定时间列与用电列。
+- kWh、Wh、kW 和 W 单位转换。
+- 7～365 天窗口。
+- 半小时重采样、重复与缺失检查。
+- Open-Meteo、data.gov.sg 或无天气模式。
+
+CLI 一键接入示例：
+
+```powershell
+python fetch_real_data.py --list
+python fetch_real_data.py --dataset uci
+python fetch_real_data.py --dataset spgroup --file data/raw/my_meter.csv
+python fetch_real_data.py --dataset csv --file data/raw/home.csv --time-col timestamp --value-col kwh
+```
+
+完整说明见 [真实数据接入指南](docs/06_real-data-import-guide.md)。
+
+---
+
+## API 概览
 
 | 方法 | 路径 | 作用 |
 | --- | --- | --- |
 | `GET` | `/api/v1/status` | 数据、地区、计划、记忆和模型状态 |
-| `GET` | `/api/v1/providers` | 可用提供方及是否配置，不返回密钥 |
+| `GET` | `/api/v1/providers` | 可用模型及配置状态，不返回密钥 |
 | `PUT` | `/api/v1/settings/model` | 显式选择实时模型或 Mock |
-| `GET/POST` | `/api/v1/datasets`、`/datasets/import` | 注册数据集与文件导入 |
-| `GET/PUT` | `/api/v1/profile` | 审核、编辑家庭画像与舒适约束 |
+| `GET` | `/api/v1/datasets` | 可接入的数据源 |
+| `POST` | `/api/v1/datasets/import` | 下载注册数据集或上传 CSV |
+| `GET/PUT` | `/api/v1/profile` | 读取和编辑家庭画像 |
 | `GET` | `/api/v1/workspace` | 实时组装五阶段工作空间 |
-| `POST` | `/api/v1/diagnose` | 运行本次诊断 Agent |
-| `POST` | `/api/v1/plan/propose` | 生成不落盘的动作建议 |
+| `POST` | `/api/v1/diagnose` | 运行本次 Agent 诊断 |
+| `POST` | `/api/v1/plan/propose` | 生成不落盘的行动草案 |
 | `POST` | `/api/v1/plan/commit` | 用户确认后保存正式计划 |
-| `POST` | `/api/v1/tracking/simulate-week` | 生成有醒目标记的合成实施后数据 |
+| `POST` | `/api/v1/tracking/simulate-week` | 生成明确标记的合成实施后数据 |
 | `POST` | `/api/v1/tracking/import` | 追加真实实施后 CSV |
-| `POST` | `/api/v1/review` | 天气归一化复盘与长期记忆 |
-| `POST` | `/api/v1/chat` | 继承当前家庭、计划和记忆的对话 |
+| `POST` | `/api/v1/review` | 天气归一化复盘和长期记忆 |
+| `POST` | `/api/v1/chat` | 基于当前家庭、计划和记忆对话 |
 | `GET` | `/api/v1/report` | 生成并下载 HTML 周报 |
 
-### 核心创新与思考
+所有错误使用统一结构：
 
-**1. LLM 不拥有数字。** 大模型擅长解释、取舍和把专业结果翻译成行动，但不适合
-做可审计计算。本项目把语言推理与能源计算拆开：模型决定“该调用什么工具”，
-Python 决定“数字是多少”。
+```json
+{
+  "error": {
+    "code": "workflow_prerequisite_missing",
+    "message": "请先完成本次 Agent 诊断，再请求计划建议。",
+    "details": null
+  }
+}
+```
 
-**2. 舒适不是软评分，而是可否决的硬约束。** 很多节能系统只按最大收益排序，
-把舒适影响写成一行小字。HomeShift 把舒适守门人放在计划进入用户视野前，
-被否决动作仍保留理由和主动放弃的收益，取舍因此透明。
+---
 
-**3. “建议”与“正式计划”在系统层隔离。** Agent 的规划工具在 Web 流程中被
-请求级代理截获，只形成草案。计划版本的产生必须经过用户确认，而不是依赖提示词
-要求模型“不要乱保存”。
+## CLI 工作流
 
-**4. 追踪不把天气变化冒充节能成效。** 系统以制冷/温控度时做归一化，再比较
-“若不行动的天气归一化预期”与实际用电；分动作异常达成率不会被包装成超额成功。
-
-**5. 记忆是结构化、可审计的结论，不是无限增长的聊天上下文。** 只有用户反馈或
-复盘得出的可靠洞察进入 `memory.json`，下一轮计划会主动读取它。
-
-### 验证命令
+Web SPA 是推荐的演示入口，CLI 仍保留完整领域能力：
 
 ```powershell
-# Python：原领域测试 + API/隔离/动态地区测试
+python -m homeshift init
+python -m homeshift status
+python -m homeshift diagnose
+python -m homeshift plan
+python -m homeshift simulate-week
+python -m homeshift review
+python -m homeshift report
+```
+
+其他实用命令：
+
+| 命令 | 用途 |
+| --- | --- |
+| `python -m homeshift providers` | 查看模型提供方与密钥状态 |
+| `python -m homeshift llm-test` | 测试模型连通性和工具调用 |
+| `python -m homeshift agents` | 查看七角色与工具覆盖 |
+| `python -m homeshift eval-disagg` | 用分表真值评估 NILM |
+| `python -m homeshift chat` | 终端对话 |
+| `python -m homeshift export-web` | 生成离线网站数据包；实时 SPA 不依赖它 |
+
+---
+
+## 核心设计与创新
+
+### 1. LLM 不拥有数字
+
+大模型擅长解释证据和协调取舍，但不适合承担可审计的能源计算。HomeShift 把语言推理
+与业务计算分离：模型决定“下一步调用什么工具”，Python 决定“数字是多少”。
+
+### 2. 舒适是硬约束，不是装饰性评分
+
+Comfort Guardian 可以否决违反锁定舒适规则的行动。被否决项仍展示理由和放弃的收益，
+让用户看见系统做了什么取舍，而不是只看一个最大节省数字。
+
+### 3. 建议和正式计划在系统层隔离
+
+Web 规划使用请求级代理 Store 截获 `save_plan`，只形成内存草案。正式计划必须经过
+用户确认才会写入版本。这个边界由代码保证，而不是只靠提示词要求模型“不要保存”。
+
+### 4. 不把天气变化冒充节能
+
+复盘先计算天气归一化预期，再与实际实施后用电比较。异常的分行动达成率会被标记为
+不可测量或不可信，而不是被包装成超额成功。
+
+### 5. Trace 描述本次真实运行
+
+API 只返回当前操作产生的 Trace。历史轨迹可以保留用于审计，但不会混入本次 Agent
+工作记录。前端加载动画也不会冒充真实工具事件。
+
+### 6. 结构化记忆，而不是无限聊天上下文
+
+只有用户反馈和复盘产生的可靠洞察进入长期记忆。下一轮规划会读取这些结构化事实，
+同时避免把所有历史对话不断塞回模型。
+
+---
+
+## 项目结构
+
+```text
+HomeShift-AI/
+├── homeshift/
+│   ├── api.py                 FastAPI 入口与 /api/v1 接口
+│   ├── api_models.py          Pydantic 请求契约
+│   ├── api_runtime.py         请求级上下文、阶段状态与提案隔离
+│   ├── agent/
+│   │   ├── core.py            Tool-use 编排循环与运行 Trace
+│   │   ├── roles.py           七个角色、工具归属与覆盖检查
+│   │   ├── prompts.py         诊断、规划和复盘提示词
+│   │   └── tools.py           结构化工具 Schema 与执行
+│   ├── domain/
+│   │   ├── disaggregate.py    NILM 负荷分解
+│   │   ├── simulate.py        候选行动与节省模拟
+│   │   ├── comfort.py         舒适约束和否决
+│   │   ├── tracker.py         天气归一化追踪
+│   │   ├── tariff.py          多币种电价
+│   │   └── carbon.py          碳排换算
+│   ├── llm/                   多模型注册表与协议适配
+│   ├── realdata/              数据集、CSV、天气与导入流水线
+│   ├── datastore/             单家庭 JSON / CSV 持久层
+│   ├── datagen/               合成家庭生成器
+│   ├── report/                HTML 周报
+│   └── export/                离线网站数据包
+├── frontend/
+│   ├── src/App.tsx            五阶段产品流程与全局抽屉
+│   ├── src/api.ts             API 客户端和 Zod 响应契约
+│   ├── src/styles.css         响应式视觉系统
+│   └── e2e/                   Playwright 完整流程
+├── tests/                     Python 领域与 API 测试
+├── docs/                      架构、操作、数据和演示文档
+├── fetch_real_data.py         CLI 真实数据入口
+└── requirements.txt
+```
+
+---
+
+## 测试与验证
+
+```powershell
+# Python 领域层与 API
 python -m unittest -v
 
-# Frontend：静态检查、契约与组件测试、生产构建
+# Frontend
 cd frontend
 npm.cmd run lint
 npm.cmd test
 npm.cmd run build
 
-# 完整隔离流程：临时工作空间，不触碰项目 data/
+# 完整五阶段 E2E
 npm.cmd run test:e2e
 ```
 
-Playwright 流程覆盖：未诊断跳转 Plan 的阻断与引导、诊断期间工作动画，以及显式
-选择 Mock → 导入合成家庭 → Agent 诊断 → 建议草案 → 用户确认提交 → 合成快进一周
-→ 天气归一化复盘。测试 API 使用临时目录，因此不会修改当前 UCI/SP Group 数据、
-正式计划或长期记忆。
+Playwright 使用临时工作空间，不会修改当前 `data/` 中的真实家庭、计划或记忆。流程覆盖
+阶段锁定、工作动画、显式 Mock、数据导入、Agent 诊断、行动提案、用户提交、合成快进
+和天气归一化复盘。
 
 ---
 
-## 设计原则
+## 项目边界
 
-**LLM 负责推理与决策，工具负责事实与计算。**
+这是一个完整的本地 Demo，而不是生产能源平台。当前有意不实现：
 
-所有 kWh、金额、CO2 数字都来自确定性计算（可复算、可审计），大模型不允许编造数字。
-这条原则不只是写在提示词里 —— 离线 Mock 模式的报告模板也被改造成完全数据驱动，
-措辞随实际占比变化，不会出现"空调是绝对大头"却显示 3.3% 这种自相矛盾。
+- 账号、权限和多租户。
+- 云数据库、对象存储和任务队列。
+- OCR 账单或电器标签识别。
+- 自动控制真实家电。
+- 大规模并发、生产监控和告警。
+- 把 NILM 估算包装成分表真值。
 
-**诚实优于好看。** 系统会主动说出自己不知道的事：
+当前工作空间只保存一个家庭。模拟数据和真实数据始终使用不同标记；没有分表真值时，
+系统会明确说明 NILM 无法定量验证。
 
-- 天气数据覆盖不足时，明确告诉你"本次未做天气归一化，数字包含气温影响"
-- 分动作达成率异常（如 1100%）时，标记为"归因不可信，更可能是分解误差"
-- 没有分表真值时，直言"精度无法定量验证（真实家庭的常态）"
-- 家庭画像由曲线反推时，标注"这是假设，不是用户自述"
+---
+
+## 文档
+
+| 文档 | 内容 |
+| --- | --- |
+| [系统架构与 Agent 原理](docs/02_architecture-and-agent-principles.md) | 编排器、七角色、工具归属和确定性边界 |
+| [操作手册](docs/03_user-guide.md) | 环境准备和完整五阶段使用流程 |
+| [演示脚本与答辩 Q&A](docs/05_demo-script-and-defense-qa.md) | 现场演示节奏、讲解重点和常见问题 |
+| [真实数据接入指南](docs/06_real-data-import-guide.md) | UCI、SP Group、通用 CSV 与天气 |
+| [多模型 API 配置](docs/07_multi-model-api-configuration.md) | Provider、环境变量、模型切换与排错 |
+| [网站数据对接说明](docs/08_web-data-integration.md) | 离线导出契约 |
+| [Presentation 建议](docs/09_presentation-guide.md) | 汇报结构与幻灯片重点 |
 
 ---
 
 ## FAQ
 
-**Q: 数据是真的吗？**
-是。默认接入 UCI 公开数据集（CC BY 4.0，法国真实家庭 2006–2010 年的电表记录），
-气温来自 Open-Meteo ERA5 再分析数据。`data/provenance.json` 记录了完整出处、
-数据质量统计与已知局限，可直接在答辩中引用。合成数据生成器仍然保留，
-用于无网络的应急演示。
+### 数据是真的吗？
 
-**Q: 为什么用法国数据而不是新加坡的？**
-新加坡没有公开的户级半小时电表数据集。UCI 的价值在于它**自带分表真值**，
-让我们能定量回答"你们的负载分解到底准不准"这个必然会被问到的问题。
-要贴近新加坡场景，用 `--dataset spgroup` 导入真实的 SP Group 账户数据即可 ——
-系统的地区、币种、电价、碳因子会自动切换。
+可以是真的，也可以是明确标记的合成数据。UCI 和用户上传的 CSV 属于真实数据，
+`data/provenance.json` 记录来源、质量和局限；合成数据用于无网络彩排。
 
-**Q: 没有 API key 能演示吗？**
-能。Mock 模式下工具循环与全部计算都是真实的，只有"下一步调用哪个工具"只能按照特定顺序进行。
+### 没有 API Key 能演示吗？
 
-**Q: 为什么节省数字可信？**
-每条规则的系数都有出处（如空调每调高 1°C 约省 7%），计算在 `domain/simulate.py`
-中完全透明；复盘时用实际电表数据 + 天气归一化验证，预测与实际的差距会如实呈现。
+可以。手动选择 Mock 后，工具执行和业务计算仍是真实的，只有工具调用顺序由离线剧本
+决定。仓库不包含任何内置密钥。
 
-**Q: 系统会自动控制我家电器吗？**
-不会。系统只给建议，所有动作都需要用户确认。这是刻意的产品边界。
+### 为什么刷新网页后还看到上一次结果？
+
+单家庭工作空间会持久化在 `data/`。这保证演示中途刷新不会丢失进度。需要全新演示时，
+在 Data 页面重新导入并确认重置即可。
+
+### 为什么节省数字可信？
+
+候选行动、费用、碳排和追踪均由 `homeshift/domain/` 中的确定性代码生成。Agent 只读取
+和解释结果，不能修改数字；实施后还会用天气归一化结果验证预测。
+
+### 系统会自动控制家电吗？
+
+不会。HomeShift 提供建议、正式计划和复盘，所有行动都由用户确认和执行。这是刻意的
+安全与产品边界。
+
+---
+
+<div align="center">
+
+**HomeShift AI — cut bills, not comfort.**
+
+</div>
